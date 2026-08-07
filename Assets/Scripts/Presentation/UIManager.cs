@@ -78,6 +78,17 @@ public class UIManager : MonoBehaviour
     private Image _teachVeil, _teachFill, _teachFrame, _teachSwatch, _teachRing;
     private TMP_Text _teachTitle, _teachBody, _teachOkLabel, _teachMarkerLabel;
     private RectTransform _teachOkRT;
+    private Button _teachOkBtn;
+
+    /// <summary>
+    /// How long OK stays locked after a card appears.
+    ///
+    /// Players were dismissing explainers reflexively without reading them — the button is where
+    /// their thumb already is, and tapping it is the fastest way back to the game. Holding it shut
+    /// briefly forces the text into view. It counts DOWN visibly rather than just sitting dead, so
+    /// it reads as deliberate rather than as an unresponsive button.
+    /// </summary>
+    private const float TeachOkLockSeconds = 3f;
     private System.Action _onTeachClosed;
     private Camera _teachCam;
     private Vector3 _teachWorld;
@@ -93,14 +104,19 @@ public class UIManager : MonoBehaviour
     /// <summary>The dot beside the reveal count. The readout is a digit AND an icon, so the
     /// tutorial passes both and the reticle centres on the pair rather than on the number.</summary>
     public RectTransform RevealsIconRect { get { return _pingIcon != null ? _pingIcon.rectTransform : null; } }
-    /// <summary>The MIDDLE star, so the reticle sits centred over the whole row rather than
-    /// hanging off the leftmost one and half off the edge of the screen.</summary>
+    /// <summary>
+    /// The middle of the THREE base stars — index 1, not the middle of the array.
+    ///
+    /// The array is four long because of the overcharge slot, so `Length / 2` pointed at the third
+    /// star and threw the tutorial reticle off to the right of a row that is normally only three
+    /// wide. The fourth star is hidden unless earned, so it must not influence the centre.
+    /// </summary>
     public RectTransform StarsRect
     {
         get
         {
             if (_hudStars == null || _hudStars.Length == 0) return null;
-            return _hudStars[_hudStars.Length / 2].rectTransform;
+            return _hudStars[Mathf.Min(GameConfig.MaxStars / 2, _hudStars.Length - 1)].rectTransform;
         }
     }
     private TMP_Text _soundLabel, _hapticsLabel, _dailyResultText;
@@ -118,6 +134,7 @@ public class UIManager : MonoBehaviour
     private Image _bannerFrame;            // corner brackets, matching the button language
     private float _bannerT = -1f, _bannerHold;
     private Color _bannerColor = Color.white;
+    private Color _bannerSourceColor = Color.white;
     private float _dailyStreakGlow;
 
     private Image _flash, _dark, _cover;
@@ -182,8 +199,11 @@ public class UIManager : MonoBehaviour
         // This replaced the score readout. Score was a number you glanced at and forgot; stars are
         // a resource you are actively spending, so they have to be visible at all times and read
         // instantly — filled vs hollow, no counting required.
-        _hudStars = new Image[GameConfig.MaxStars];
-        for (int i = 0; i < GameConfig.MaxStars; i++)
+        // Four slots, not three: the fourth is the overcharge star, hidden until a bonus echo is
+        // collected at full health. Built up front so it can simply appear rather than having to
+        // be created mid-level.
+        _hudStars = new Image[GameConfig.OverchargeStars];
+        for (int i = 0; i < GameConfig.OverchargeStars; i++)
         {
             var sGO = new GameObject("HudStar" + i);
             sGO.transform.SetParent(_safe, false);
@@ -256,10 +276,13 @@ public class UIManager : MonoBehaviour
         var iconGO = new GameObject("PingIcon");
         iconGO.transform.SetParent(_safe, false);
         _pingIcon = iconGO.AddComponent<Image>();
-        _pingIcon.sprite = _dotSprite; _pingIcon.color = DotFull; _pingIcon.raycastTarget = false;
+        // Sonar arcs, not a dot: a filled circle beside a number reads as a generic counter and
+        // never told anyone the number meant "pings you can still fire".
+        _pingIcon.sprite = VisualUtils.SonarIcon(); _pingIcon.color = DotFull; _pingIcon.raycastTarget = false;
         var irt = _pingIcon.rectTransform;
         irt.anchorMin = irt.anchorMax = new Vector2(1, 1); irt.pivot = new Vector2(1, 1);
-        irt.anchoredPosition = new Vector2(-34, -36); irt.sizeDelta = new Vector2(40, 40);
+        // Slightly larger than the old dot — the arcs need the extra pixels to stay legible.
+        irt.anchoredPosition = new Vector2(-32, -36); irt.sizeDelta = new Vector2(52, 52);
 
         // Full-screen effect layers (outside safe area on purpose).
         _dark  = FullScreen("Dark",  new Color(0, 0, 0, 0));
@@ -369,8 +392,16 @@ public class UIManager : MonoBehaviour
         if (_hudStars == null) return;
         for (int i = 0; i < _hudStars.Length; i++)
         {
+            bool overchargeSlot = i >= max;          // the fourth star
             bool lit = i < remaining;
-            _hudStars[i].color = lit ? StarLit : new Color(StarLit.r, StarLit.g, StarLit.b, 0.16f);
+
+            // The overcharge slot is invisible until earned — an empty fourth socket sitting
+            // there permanently would read as a life the player has somehow already lost.
+            _hudStars[i].gameObject.SetActive(!overchargeSlot || lit);
+            if (overchargeSlot && !lit) continue;
+
+            Color c = overchargeSlot ? GameConfig.BonusOrbColor : StarLit;
+            _hudStars[i].color = lit ? c : new Color(c.r, c.g, c.b, 0.16f);
             _hudStars[i].rectTransform.localScale = Vector3.one * (lit ? 1f : 0.82f);
         }
     }
@@ -562,11 +593,44 @@ public class UIManager : MonoBehaviour
     /// </summary>
     public void ShowBanner(string message, Color color, float holdSeconds = 1.1f)
     {
+        // A banner fired while an explainer is up prints straight through the card — entering a
+        // new sector does both at once, so "SECTOR 2 / THE DEEP" landed on top of the card title.
+        // Hold it and replay it once the card is dismissed; the two are sequential beats, not
+        // simultaneous ones.
+        if (TeachOpen)
+        {
+            _pendingBanner = message;
+            _pendingBannerColor = color;
+            _pendingBannerHold = holdSeconds;
+            return;
+        }
+
         _bannerText.text = message;
+        _bannerSourceColor = color;      // un-lerped, so a held banner can be replayed exactly
         _bannerColor = Color.Lerp(color, Color.white, 0.3f);
         NeonColor(_bannerText, color, 0.8f);
         _bannerHold = holdSeconds;
         _bannerT = 0f;
+        if (_bannerBg != null) _bannerBg.color = new Color(PanelScrim.r, PanelScrim.g, PanelScrim.b, 0f);
+        if (_bannerFrame != null) _bannerFrame.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, 0f);
+    }
+
+    /// <summary>
+    /// The other half of the banner/teach-card collision, and the half that actually bites: a new
+    /// sector calls ShowBanner from BuildLevel and only *then* runs MaybeTeachLevel, so the guard in
+    /// ShowBanner sees TeachOpen == false and lets the banner through — the card opens over it a
+    /// frame later. Snatch any in-flight banner back when a card opens and requeue it for the close.
+    /// </summary>
+    private void HoldLiveBanner()
+    {
+        if (_bannerT < 0f) return;                    // nothing on screen
+
+        _pendingBanner = _bannerText.text;
+        _pendingBannerColor = _bannerSourceColor;
+        _pendingBannerHold = _bannerHold;
+
+        _bannerT = -1f;
+        _bannerText.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, 0f);
         if (_bannerBg != null) _bannerBg.color = new Color(PanelScrim.r, PanelScrim.g, PanelScrim.b, 0f);
         if (_bannerFrame != null) _bannerFrame.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, 0f);
     }
@@ -602,6 +666,25 @@ public class UIManager : MonoBehaviour
             // The card itself eases up on open so it doesn't just blink into existence.
             float pop = Easing.OutBack(Mathf.Clamp01(_teachT / 0.28f));
             _teachCard.localScale = Vector3.one * Mathf.Lerp(0.86f, 1f, pop);
+
+            // OK counts down, then unlocks.
+            if (_teachOkBtn != null && !_teachOkBtn.interactable)
+            {
+                float left = TeachOkLockSeconds - _teachT;
+                if (left <= 0f)
+                {
+                    _teachOkBtn.interactable = true;
+                    _teachOkLabel.text = Spaced("OK");
+                    _teachOkLabel.color = new Color(0.95f, 0.99f, 1f, 1f);
+                    _teachOkRT.localScale = Vector3.one * 1.12f;   // small pop as it becomes live
+                }
+                else _teachOkLabel.text = Mathf.CeilToInt(left).ToString();
+            }
+            else if (_teachOkRT != null && _teachOkRT.localScale.x > 1f)
+            {
+                float s = Mathf.MoveTowards(_teachOkRT.localScale.x, 1f, dt * 0.8f);
+                _teachOkRT.localScale = Vector3.one * s;
+            }
         }
 
         // Flash / darken decay.
@@ -661,7 +744,11 @@ public class UIManager : MonoBehaviour
             {
                 _starLossT = -1f;
                 _starLossGlow.color = new Color(Danger.r, Danger.g, Danger.b, 0f);
-                SetStars(_starsShown, _hudStars != null ? _hudStars.Length : 3);
+                // MaxStars, not _hudStars.Length. The array is 4 long because of the overcharge
+                // slot; passing 4 as the max made SetStars treat that slot as an ordinary star and
+                // leave it on screen dimmed — so spending a gold star showed a fourth empty socket
+                // that reads as a life you never had.
+                SetStars(_starsShown, GameConfig.MaxStars);
             }
         }
 
@@ -1324,10 +1411,10 @@ public class UIManager : MonoBehaviour
         _teachBody.textWrappingMode = TextWrappingModes.Normal;   // body copy, unlike every readout
         _teachBody.overflowMode = TextOverflowModes.Overflow;
 
-        var okBtn = Button_("TeachOk", _teachCard, new Vector2(0.5f, 0.5f), Vector2.zero,
-                            new Vector2(400, TeachOkH), Spaced("OK"), 42, Accent, true, out _teachOkLabel);
-        okBtn.onClick.AddListener(CloseTeachCard);
-        _teachOkRT = okBtn.transform as RectTransform;
+        _teachOkBtn = Button_("TeachOk", _teachCard, new Vector2(0.5f, 0.5f), Vector2.zero,
+                              new Vector2(400, TeachOkH), Spaced("OK"), 42, Accent, true, out _teachOkLabel);
+        _teachOkBtn.onClick.AddListener(CloseTeachCard);
+        _teachOkRT = _teachOkBtn.transform as RectTransform;
 
         // ---- marker: a pulsing reticle over a world object ----
         // Built AFTER the card so it draws on top of it. The card is placed in the opposite half
@@ -1417,6 +1504,7 @@ public class UIManager : MonoBehaviour
                               string markerLabel = null)
     {
         if (_teachPanel == null) return;
+        HoldLiveBanner();      // a banner already mid-flight would print through the card
         _onTeachClosed = onClosed;
         _teachT = 0f;
 
@@ -1483,6 +1571,14 @@ public class UIManager : MonoBehaviour
             _teachCard.anchoredPosition = Vector2.zero;
         }
 
+        // Lock OK until the player has had time to actually read the card.
+        if (_teachOkBtn != null)
+        {
+            _teachOkBtn.interactable = false;
+            _teachOkLabel.text = Mathf.CeilToInt(TeachOkLockSeconds).ToString();
+            _teachOkLabel.color = new Color(1f, 1f, 1f, 0.45f);
+        }
+
         _teachPanel.SetActive(true);
         Haptics.Medium();
         if (Audio != null) Audio.PlayTeach();
@@ -1494,12 +1590,25 @@ public class UIManager : MonoBehaviour
         var cb = _onTeachClosed;
         _onTeachClosed = null;      // cleared BEFORE invoking, so a callback that opens another
         if (cb != null) cb();       // card can't have its own callback wiped by this one
+
+        // Release any banner that was held back — but only if the callback didn't immediately
+        // open another card, which the tutorial chain does on every step.
+        if (!TeachOpen && _pendingBanner != null)
+        {
+            string m = _pendingBanner; _pendingBanner = null;
+            ShowBanner(m, _pendingBannerColor, _pendingBannerHold);
+        }
     }
+
+    private string _pendingBanner;
+    private Color _pendingBannerColor;
+    private float _pendingBannerHold;
 
     /// <summary>Force the card away without running its callback (bailing out to the menu).</summary>
     public void HideTeachCard()
     {
         _onTeachClosed = null;
+        _pendingBanner = null;   // bailing out of the level; a held banner is stale now
         if (_teachPanel != null) _teachPanel.SetActive(false);
     }
 

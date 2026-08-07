@@ -19,7 +19,7 @@ public class ProceduralAudio : MonoBehaviour
 
     private AudioClip _ping, _tickClip, _star, _moveClip, _rewind, _lose, _timeWarn, _countTick;
     private AudioClip _starLost, _starGained, _whoosh, _button, _teach, _exitHit;
-    private AudioClip _praise0, _praise1, _praise2;
+    private AudioClip _praise0, _praise1, _praise2, _praise3, _overcharge;
     private AudioSource _ui;     // own source so UI never cuts off a gameplay cue mid-play
     private float _moveTargetVol, _moveLevel;
 
@@ -66,6 +66,13 @@ public class ProceduralAudio : MonoBehaviour
         _praise0 = BuildArpeggio(new[] { 523.25f, 659.25f, 783.99f }, 0.10f, 0.5f);
         _praise1 = BuildArpeggio(new[] { 523.25f, 659.25f, 783.99f, 1046.50f }, 0.09f, 0.55f);
         _praise2 = BuildArpeggio(new[] { 523.25f, 659.25f, 783.99f, 1046.50f, 1318.51f, 1567.98f }, 0.075f, 0.6f);
+        // Overcharged clear: the same triad an octave up, running all the way to C7. Brighter and
+        // higher than any other outcome, so the rarest result is instantly the best-sounding one.
+        _praise3 = BuildArpeggio(new[] { 523.25f, 783.99f, 1046.50f, 1318.51f, 1567.98f, 2093.00f, 2637.02f },
+                                 0.068f, 0.62f);
+
+        // Picking the fourth star up mid-level. A fast bright rise so it lands as a windfall.
+        _overcharge = BuildArpeggio(new[] { 783.99f, 1046.50f, 1318.51f, 1567.98f }, 0.065f, 0.6f);
 
         _move.clip = _moveClip;
         _move.Play(); // runs continuously at volume 0; SetMoveLevel opens it up
@@ -83,9 +90,15 @@ public class ProceduralAudio : MonoBehaviour
     {
         if (!_main) return;
         _main.pitch = 1f;
-        AudioClip c = starsLeft >= 3 ? _praise2 : starsLeft >= 2 ? _praise1 : _praise0;
-        _main.PlayOneShot(c, 0.9f);
+        AudioClip c = starsLeft >= 4 ? _praise3
+                    : starsLeft >= 3 ? _praise2
+                    : starsLeft >= 2 ? _praise1
+                                     : _praise0;
+        _main.PlayOneShot(c, starsLeft >= 4 ? 1f : 0.9f);
     }
+
+    /// <summary>The fourth star, taken at full health. The brightest cue in the game.</summary>
+    public void PlayOvercharge() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_overcharge, 0.95f); } }
 
     /// <summary>A life spent to a decoy. Deliberately the loudest negative cue in the game.</summary>
     public void PlayStarLost() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_starLost, 0.9f); } }

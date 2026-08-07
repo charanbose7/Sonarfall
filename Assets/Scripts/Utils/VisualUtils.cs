@@ -35,6 +35,7 @@ public static class VisualUtils
     public static Sprite Check(int size = 48, float thickness = 5f) => Cached("Check" + size + "," + thickness, () => BuildCheck(size, thickness));
     public static Sprite Gear(int size = 96) => Cached("Gear" + size, () => BuildGear(size));
     public static Sprite PingStar(int size = 128) => Cached("PingStar" + size, () => BuildPingStar(size));
+    public static Sprite SonarIcon(int size = 128) => Cached("SonarIcon" + size, () => BuildSonarIcon(size));
 
     /// <summary>Soft radial glow: bright at the center, fading to transparent at the edge.</summary>
     private static Sprite BuildRadialGlow(int size = 128)
@@ -130,6 +131,63 @@ public static class VisualUtils
     /// ring sits at ~0.86 of the radius, a localScale of S gives a circle ~0.86*S world units
     /// across — so scaling it a bit above the ball's size draws the ring cleanly AROUND the ball.
     /// </summary>
+    /// <summary>
+    /// The reveal icon: a source dot with two arcs radiating from it, like a wifi glyph rotated to
+    /// sweep rightward.
+    ///
+    /// Replaces the plain dot, which said nothing — a filled circle next to a number reads as a
+    /// generic counter and gave no clue it meant "pings you can still fire". Arcs leaving a point
+    /// is the one shape everyone already parses as an emitted signal, and it matches the sonar
+    /// rings the game draws in the maze.
+    /// </summary>
+    private static Sprite BuildSonarIcon(int size = 128)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var px = new Color[size * size];
+
+        // Emitter sits left-of-centre so the arcs have room to open to the right.
+        float ox = size * 0.24f, oy = (size - 1) * 0.5f;
+        float unit = size * 0.5f;
+        float dotR = size * 0.085f;
+        float stroke = size * 0.062f;
+        float[] arcs = { size * 0.30f, size * 0.50f };   // two sweeps
+
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float dx = x - ox, dy = y - oy;
+            float d = Mathf.Sqrt(dx * dx + dy * dy);
+            float a = 0f;
+
+            // Solid emitter dot.
+            a = Mathf.Max(a, Mathf.Clamp01((dotR - d) / (unit * 0.05f)));
+
+            // Arcs, but only the right-hand ~120 degrees of each — a full ring would just read
+            // as a target reticle, which is what the exit marker already uses.
+            if (dx > -unit * 0.04f)
+            {
+                float cosA = d > 0.001f ? dx / d : 1f;      // 1 straight right, 0 straight up
+                float wedge = Mathf.Clamp01((cosA - 0.34f) / 0.22f);
+                if (wedge > 0f)
+                {
+                    for (int i = 0; i < arcs.Length; i++)
+                    {
+                        float band = Mathf.Abs(d - arcs[i]);
+                        a = Mathf.Max(a, Mathf.Clamp01(1f - band / (stroke * 0.5f)) * wedge);
+                    }
+                }
+            }
+
+            px[y * size + x] = new Color(1f, 1f, 1f, a * a);   // squared = crisper edge
+        }
+
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply(false, true);
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+    }
+
     private static Sprite BuildHollowRing(int size = 256, float radiusFrac = 0.86f, float thickness = 0.07f)
     {
         var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);

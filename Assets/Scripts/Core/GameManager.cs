@@ -181,6 +181,7 @@ public class GameManager : MonoBehaviour
     {
         _isDaily = false;
         _failStreak = 0;
+        _stars = GameConfig.StartStars;              // a new run never inherits a carried gold star
         _level = SaveData.CurrentLevel;              // resume, don't restart
         _dayStreak = SaveData.RegisterDailyVisit();  // opening the game counts toward the streak
         _dailyBonusPending = true;                   // spent by the first level this session builds
@@ -207,7 +208,8 @@ public class GameManager : MonoBehaviour
     private void BeginDailyRun()
     {
         _isDaily = true;
-        _level = 1; _failStreak = 0;      // the daily is always one standalone maze
+        _level = 1; _failStreak = 0;
+        _stars = GameConfig.StartStars;   // the daily is a standalone maze, no carry-over
         _dayStreak = SaveData.RegisterDailyVisit();
 
         BuildLevel(_level);
@@ -274,8 +276,12 @@ public class GameManager : MonoBehaviour
             _ui.SetSector(GameConfig.SectorName(level), GameConfig.LevelInSector(level),
                           GameConfig.LevelsPerSector, sectorColor);
         }
-        // Stars are per-level lives, so every level — including a retry — starts at full health.
-        _stars = GameConfig.StartStars;
+        // Every level starts at full health — but a gold overcharge star you are still holding
+        // CARRIES FORWARD. Wiping it at the level boundary made it a one-level trinket; letting it
+        // ride turns finding an echo into something you protect across levels, and gives the extra
+        // life somewhere meaningful to be spent.
+        _stars = Mathf.Clamp(Mathf.Max(_stars, GameConfig.StartStars),
+                             GameConfig.StartStars, GameConfig.OverchargeStars);
         _ui.SetStars(_stars, GameConfig.MaxStars);
 
         // Announce a new sector as you enter it.
@@ -359,21 +365,38 @@ public class GameManager : MonoBehaviour
         _orbActive = false;
         _orbSR.gameObject.SetActive(false);
 
-        // Restores a life rather than paying points. At full stars there is nothing to restore,
-        // so it reads as a near-miss — deliberately: capping it is what stops a lucky echo from
-        // simply cancelling out the decoys on a level you were already clearing cleanly.
-        bool healed = _stars < GameConfig.MaxStars;
-        if (healed)
+        // Always worth taking, at every health level. A reward that sometimes pays nothing trains
+        // players to ignore it, so there are three outcomes and never a null one:
+        //
+        //   hurt            -> restore a normal star
+        //   full (3)        -> a fourth, GOLD star
+        //   already gold(4) -> +1 reveal, since a second gold star has nowhere to go
+        //
+        // The last case matters because the gold star now carries between levels, so arriving at a
+        // level already holding one is common rather than exotic.
+        if (_stars >= GameConfig.OverchargeStars)
+        {
+            _pings++;
+            _ui.SetPingsRemaining(_pings);
+            _ui.ShowBanner("BONUS ECHO\n+1 REVEAL", GameConfig.BonusOrbColor, 0.9f);
+            _audio.PlayOvercharge();
+            _ui.Flash(0.3f);
+        }
+        else if (_stars >= GameConfig.MaxStars)
+        {
+            _stars = GameConfig.OverchargeStars;
+            _ui.SetStars(_stars, GameConfig.MaxStars);
+            _ui.ShowBanner("OVERCHARGED\n+1 GOLD STAR", GameConfig.BonusOrbColor, 0.9f);
+            _audio.PlayOvercharge();
+            _ui.Flash(0.35f);
+            _shakeTimer = Mathf.Max(_shakeTimer, 0.12f);
+        }
+        else
         {
             _stars = Mathf.Min(GameConfig.MaxStars, _stars + GameConfig.BonusOrbStars);
             _ui.SetStars(_stars, GameConfig.MaxStars);
             _ui.ShowBanner("BONUS ECHO\n+1 STAR", GameConfig.BonusOrbColor, 0.7f);
             _audio.PlayStarGained();
-        }
-        else
-        {
-            _ui.ShowBanner("BONUS ECHO\nALREADY FULL", GameConfig.BonusOrbColor, 0.7f);
-            _audio.PlayStar(2);
         }
 
         _ui.FlashColor(GameConfig.BonusOrbColor, 0.3f);
@@ -420,7 +443,17 @@ public class GameManager : MonoBehaviour
 
             _decoyPos[placed] = pos;
             _decoyHideUntil[placed] = 0f;
-            _decoyPhase[placed] = Random.Range(0f, Mathf.PI * 2f); // desync the blinking
+
+            // Blink offset. Below DecoyGateLevel every decoy is independent; from there they are
+            // paired into GATES — the second of each pair sits exactly half a cycle behind the
+            // first, so the two take turns and never clear together. Pairs are consecutive along
+            // the solution path, which means a gate always occupies one stretch of corridor
+            // rather than two unrelated corners of the maze.
+            bool gates = _level >= GameConfig.DecoyGateLevel;
+            bool secondOfPair = gates && (placed % 2) == 1;
+            _decoyPhase[placed] = secondOfPair
+                ? _decoyPhase[placed - 1] + Mathf.PI
+                : Random.Range(0f, Mathf.PI * 2f);
             var transparent = new Color(GameConfig.DecoyColor.r, GameConfig.DecoyColor.g, GameConfig.DecoyColor.b, 0f);
 
             var sr = _decoySR[placed];
@@ -478,6 +511,20 @@ public class GameManager : MonoBehaviour
                 "Touch one while it is <b>solid</b> and it costs you <b>a star</b> and " +
                 Mathf.RoundToInt(GameConfig.DecoyTimePenalty) + " seconds.\n\n" +
                 "Lose all three stars and the level restarts.",
+                UIManager.Danger, GameConfig.DecoyColor, null);
+            return;
+        }
+
+        // Paired decoys. Same hazard, new rule — without naming it the player just experiences a
+        // corridor that got mysteriously harder, which reads as unfair rather than as a new idea.
+        if (_decoyCount >= 2 && _level >= GameConfig.DecoyGateLevel && !SaveData.TaughtGate)
+        {
+            SaveData.MarkTaughtGate();
+            _ui.ShowTeachCard(
+                "PAIRED DECOYS",
+                "Some decoys now come in twos.\n\n" +
+                "They <b>take turns</b> — when one goes dark, the other lights up.\n\n" +
+                "Watch the rhythm and cross when both are dark.",
                 UIManager.Danger, GameConfig.DecoyColor, null);
             return;
         }
@@ -663,7 +710,7 @@ public class GameManager : MonoBehaviour
 
     private void UpdateDecoys()
     {
-        float hitRadius = GameConfig.CellSize * 0.4f;
+        float hitRadius = GameConfig.CellSize * GameConfig.DecoyHitRadius;
 
         for (int i = 0; i < _decoyCount; i++)
         {
@@ -677,7 +724,8 @@ public class GameManager : MonoBehaviour
             float alpha = blackedOut ? 0f : vis * GameConfig.DecoyMaxAlpha;
             var c = GameConfig.DecoyColor; c.a = alpha;
             sr.color = c;
-            sr.transform.localScale = Vector3.one * (GameConfig.CellSize * (0.55f + 0.2f * vis));
+            sr.transform.localScale = Vector3.one *
+                (GameConfig.CellSize * (GameConfig.DecoyDrawScale + GameConfig.DecoyDrawPulse * vis));
 
             // Hollow highlight ring around it: lit by the SONAR as the ping front sweeps over the
             // decoy (same timing as the walls), so a ping also shows you where the decoys are.
@@ -905,13 +953,36 @@ public class GameManager : MonoBehaviour
         if (State != GameState.Playing && State != GameState.Celebrating) return;
         StopAllCoroutines();
         Time.timeScale = 1f;
+        StartCoroutine(ResetLevelRoutine());
+    }
+
+    /// <summary>
+    /// Regenerate the level behind a full blackout.
+    ///
+    /// It used to swap the maze instantly, which was indistinguishable from nothing happening —
+    /// the layout is invisible anyway, so a player pressing RETRY got a black screen before and a
+    /// black screen after and no confirmation the button did anything. The wipe and the callout
+    /// are the feedback.
+    /// </summary>
+    private IEnumerator ResetLevelRoutine()
+    {
+        State = GameState.Celebrating;      // freeze the clock and input during the wipe
         _ui.HideCelebration();
         _ui.HideTeachCard();
-        _failStreak = 0;
-        BuildLevel(_level);
-        State = GameState.Playing;
         _audio.PlayWhoosh();
         Haptics.Medium();
+
+        _ui.SetCover(1f);
+        yield return new WaitForSecondsRealtime(0.28f);
+
+        _failStreak = 0;
+        BuildLevel(_level);
+        _ui.ShowBanner("LEVEL " + _level + "\nRESET", UIManager.Accent, 0.9f);
+
+        yield return new WaitForSecondsRealtime(0.12f);   // hold the black a beat so it registers
+
+        State = GameState.Playing;
+        _ui.SetCover(0f);
         MaybeTeachLevel();      // the fresh layout may introduce something new — see FailRoutine
     }
 

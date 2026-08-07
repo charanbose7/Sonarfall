@@ -97,10 +97,20 @@ public static class GameConfig
     // echo. Run out and the level is failed. This is what turns a decoy from "mild annoyance"
     // into something worth actually avoiding.
     public const int   StartStars         = 3;
-    public const int   MaxStars           = 3;     // an echo found at full health is a near-miss, not a waste
+    public const int   MaxStars           = 3;     // the normal ceiling
     public const int   DecoyStarCost      = 1;
     public const float DecoyTimePenalty   = 2f;    // seconds burned off the clock per decoy hit
     public const int   BonusOrbStars      = 1;
+
+    /// <summary>
+    /// A bonus echo collected at FULL health grants a fourth, golden star instead of being wasted.
+    ///
+    /// Previously the orb simply did nothing if you were undamaged, which is the worst possible
+    /// shape for a variable reward — a prize that sometimes pays zero teaches players to ignore it.
+    /// Now finding one is always worth the detour, and clearing a level overcharged is its own
+    /// distinct outcome with its own praise and a brighter sting.
+    /// </summary>
+    public const int   OverchargeStars    = 4;
 
     // ---- Loop timing ----
     // 45s was comfortable enough that testers were finishing with time to spare on levels the
@@ -117,6 +127,23 @@ public static class GameConfig
     public const int   DecoyStartLevel    = 3;
     public const int   DecoyEveryLevels   = 3;   // was 4 — decoys stack up faster
     public const int   MaxDecoys          = 5;   // was 3; now the main source of difficulty
+
+    /// <summary>
+    /// From this level, decoys are placed in PAIRS that blink half a cycle apart instead of on
+    /// independent random offsets.
+    ///
+    /// A decoy is only solid for about a quarter of its cycle, so two random ones frequently
+    /// clear at the same time and hand the player one long, lazy window — crossing becomes a
+    /// matter of waiting rather than timing. Pinning a pair in antiphase guarantees their danger
+    /// never coincides, which spreads it across the cycle and halves the safe window into two
+    /// shorter, *regular* gaps. The corridor stays passable and the answer stays learnable; it
+    /// just has to be read rather than waited out.
+    ///
+    /// Deliberately NOT applied to every decoy at once: five decoys spread evenly would put
+    /// something solid at almost every instant. Pairs gate a stretch of corridor; the rest stay
+    /// independent.
+    /// </summary>
+    public const int   DecoyGateLevel     = 12;
     // Level 6, not 5: the sector-1 finale is already the difficulty peak, and stacking a brand
     // new mechanic on top of the hardest level a new player has seen is how you lose them. It
     // debuts on the RELIEF level right after instead, where there is room to learn it.
@@ -126,6 +153,14 @@ public static class GameConfig
     public const float DecoyFadeSpeed     = 2.1f;  // fade in/out rate; slower = easier to time a crossing
     public const float DecoyMaxAlpha      = 0.95f; // peak visibility
     public const float DecoyVisibleHit    = 0.5f;  // only collidable once this visible (time your run!)
+    // Hit radius and drawn size, as a fraction of a cell.
+    //
+    // Both raised: at 0.40 a player could hug the outer wall through a corner and slip past a
+    // decoy sitting in the middle of the cell, so the hazard was dodgeable by hugging geometry
+    // rather than by timing the fade — which is the decision it exists to create.
+    public const float DecoyHitRadius     = 0.52f; // was 0.40
+    public const float DecoyDrawScale     = 0.72f; // base drawn size (was 0.55)
+    public const float DecoyDrawPulse     = 0.22f; // extra size at full visibility
     public const float DecoyHitBlackout   = 1.0f;  // after taking a ping it blinks out so you can pass
     public const int   DecoyPingCost      = 1;     // "search taps" lost on a visible hit
 
@@ -220,6 +255,9 @@ public static class GameConfig
     // run is acknowledged differently from a scrape — the player feels the difference without
     // being shown a score they can't do anything with. Several per tier so the same word doesn't
     // come up level after level and stop registering.
+    /// <summary>Only reachable by finding a bonus echo while already undamaged — it should feel
+    /// rarer and louder than a merely clean clear.</summary>
+    public static readonly string[] PraiseOvercharged = { "OVERCHARGED", "FULL SPECTRUM", "PEAK ECHO", "MAXIMUM" };
     public static readonly string[] PraiseFlawless = { "FLAWLESS", "PERFECT", "UNTOUCHED", "MASTERFUL", "SUBLIME" };
     public static readonly string[] PraiseGood     = { "FABULOUS", "AMAZING", "NICE ONE", "SHARP", "SUPERB", "SLICK" };
     public static readonly string[] PraiseScraped  = { "PHEW!", "CLOSE ONE", "JUST MADE IT", "SURVIVED", "BARELY" };
@@ -227,7 +265,8 @@ public static class GameConfig
     /// <summary>A praise word for a clear that kept <paramref name="starsLeft"/> of its lives.</summary>
     public static string PraiseFor(int starsLeft)
     {
-        string[] pool = starsLeft >= MaxStars ? PraiseFlawless
+        string[] pool = starsLeft >= OverchargeStars ? PraiseOvercharged
+                      : starsLeft >= MaxStars ? PraiseFlawless
                       : starsLeft >= 2        ? PraiseGood
                                               : PraiseScraped;
         return pool[Random.Range(0, pool.Length)];

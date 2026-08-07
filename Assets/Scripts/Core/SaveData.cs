@@ -20,6 +20,7 @@ public static class SaveData
     private const string KTaughtOrb  = "em_taught_orb";    // seen the bonus-echo explainer
     private const string KTaughtDecoy= "em_taught_decoy";  // seen the decoy explainer
     private const string KTaughtExit = "em_taught_exit";   // seen the moving-exit explainer
+    private const string KTaughtGate = "em_taught_gate";   // seen the paired-decoy explainer
 
     /// <summary>
     /// The level to resume on. This is a puzzle game, not an endless runner: quitting on level 24
@@ -116,6 +117,7 @@ public static class SaveData
         PlayerPrefs.SetInt(KTaughtOrb, 0);
         PlayerPrefs.SetInt(KTaughtDecoy, 0);
         PlayerPrefs.SetInt(KTaughtExit, 0);
+        PlayerPrefs.SetInt(KTaughtGate, 0);
         PlayerPrefs.SetInt(KCurLevel, 1);
         PlayerPrefs.Save();
     }
@@ -137,6 +139,10 @@ public static class SaveData
     /// <summary>Has the moving-exit explainer been shown?</summary>
     public static bool TaughtMovingExit => PlayerPrefs.GetInt(KTaughtExit, 0) == 1;
     public static void MarkTaughtMovingExit() { PlayerPrefs.SetInt(KTaughtExit, 1); PlayerPrefs.Save(); }
+
+    /// <summary>Has the paired-decoy (gate) explainer been shown?</summary>
+    public static bool TaughtGate => PlayerPrefs.GetInt(KTaughtGate, 0) == 1;
+    public static void MarkTaughtGate() { PlayerPrefs.SetInt(KTaughtGate, 1); PlayerPrefs.Save(); }
 
     public static bool HintSeen => PlayerPrefs.GetInt(KHintSeen, 0) == 1;
     public static void MarkHintSeen()
