@@ -44,7 +44,15 @@ public static class MazeGenerator
 {
     public const int N = 1, E = 2, S = 4, W = 8;
 
-    public static MazeData Generate(int size, float cellSize, int seed)
+    /// <param name="horizontalStart">
+    /// Force the first carve out of (0,0) to go East, guaranteeing the player can move left/right
+    /// from the spawn. The tutorial's first card says "slide your finger" over a finger miming a
+    /// horizontal drag — on a maze whose start cell only opened north, that instruction was a lie
+    /// and the step could not be completed the way it was demonstrated. Biasing the first DFS step
+    /// (rather than knocking the wall out afterwards) keeps the maze perfect, which SolvePath and
+    /// the dead-end scan both depend on.
+    /// </param>
+    public static MazeData Generate(int size, float cellSize, int seed, bool horizontalStart = false)
     {
         var rng = new System.Random(seed);
 
@@ -58,6 +66,7 @@ public static class MazeGenerator
         var start = new Vector2Int(0, 0);
         visited[start.x, start.y] = true;
         stack.Push(start);
+        bool biased = false;
 
         while (stack.Count > 0)
         {
@@ -65,7 +74,17 @@ public static class MazeGenerator
             var neighbors = UnvisitedNeighbors(cur, size, visited);
             if (neighbors.Count == 0) { stack.Pop(); continue; }
 
-            var next = neighbors[rng.Next(neighbors.Count)];
+            Vector2Int next;
+            if (horizontalStart && cur == start && !biased && size > 1
+                && neighbors.Contains(new Vector2Int(1, 0)))
+            {
+                next = new Vector2Int(1, 0);   // spawn cell opens East, so a sideways drag works
+                biased = true;
+            }
+            else
+            {
+                next = neighbors[rng.Next(neighbors.Count)];
+            }
             RemoveWallBetween(cells, cur, next);
             visited[next.x, next.y] = true;
             stack.Push(next);

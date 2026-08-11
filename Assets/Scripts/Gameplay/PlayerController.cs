@@ -121,7 +121,14 @@ public class PlayerController : MonoBehaviour
             {
                 // A press that starts on a button belongs to the UI, not the game — otherwise
                 // tapping CLOSE or the gear would also fire a ping.
-                _gestureOnUI = EchoInput.IsOverUI(EchoInput.PointerScreen);
+                //
+                // The HUD band is a second, separate case: the clock, level, stars and reveal
+                // counter all have raycastTarget off (they are readouts, not controls), so the UI
+                // hit test above returns false for them and a thumb resting on the clock was
+                // steering the dot and firing pings. Ask the UI for its readout band explicitly.
+                Vector2 down = EchoInput.PointerScreen;
+                _gestureOnUI = EchoInput.IsOverUI(down)
+                            || (_gm != null && _gm.IsOverHud(down));
                 _dragging = false;
                 _downScreen = EchoInput.PointerScreen;
                 _downTime = Time.time;

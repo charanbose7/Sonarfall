@@ -91,9 +91,14 @@ public static class SaveData
     }
 
     /// <summary>
-    /// True once the player has played an endless run through to its end (i.e. lost once).
+    /// True once the player has seen a normal level through to an ending — cleared it OR run out.
     /// The Daily Maze stays locked until then: it is a single high-pressure attempt with no
     /// retries, which is a terrible first experience for someone who has never pinged a wall.
+    ///
+    /// The name is a leftover from the score-run era, when "the run finished" meant the player had
+    /// died and there was exactly one way to get here. On a level ladder both outcomes qualify, and
+    /// for a while only the losing one was wired up — so clearing level 1 left the Daily locked
+    /// while failing it opened the door.
     /// </summary>
     public static bool RunFinished => PlayerPrefs.GetInt(KRunFinished, 0) == 1;
 

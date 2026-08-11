@@ -49,6 +49,11 @@ public class TutorialController : MonoBehaviour
     public void Begin(GameManager gm, UIManager ui, PlayerController player)
     {
         _gm = gm; _ui = ui; _player = player;
+        // Marked as seen the moment it STARTS, not when it finishes. A player who quits to the
+        // menu half way through used to get the whole thing again on their next CONTINUE, which
+        // reads as the game refusing to let them past the tutorial. Bailing early is safe now that
+        // GameConfig.PingNudgeDelay catches anyone who never learned to ping.
+        SaveData.MarkHintSeen();
         _step = Step.Drag; _t = 0f; _dragAccum = 0f;
         // Must be cleared, not just the step index. This controller survives a progress reset, so
         // a leftover _pinged from the previous run satisfied the ping gate the instant the drag
@@ -73,8 +78,14 @@ public class TutorialController : MonoBehaviour
         rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
         rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
 
-        var font = TMP_Settings.defaultFontAsset;
-        if (font == null) font = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
+        // Use the game's own typefaces. This overlay used to fall back to TMP's default
+        // (LiberationSans), so the very first text a new player ever saw was in a font that appears
+        // nowhere else in the game — testers reported it as blurry and hard to read next to the
+        // Orbitron/ChakraPetch everything else uses.
+        var titleFont = _ui != null ? _ui.TitleFont : null;
+        var bodyFont  = _ui != null ? _ui.BodyFont  : null;
+        if (titleFont == null) titleFont = TMP_Settings.defaultFontAsset;
+        if (bodyFont  == null) bodyFont  = titleFont;
 
         // Dim the maze slightly so the instruction reads, without hiding the game.
         var dim = new GameObject("Dim");
@@ -85,10 +96,13 @@ public class TutorialController : MonoBehaviour
         var drt = dimImg.rectTransform;
         drt.anchorMin = Vector2.zero; drt.anchorMax = Vector2.one; drt.offsetMin = Vector2.zero; drt.offsetMax = Vector2.zero;
 
-        _title = MakeText(font, "TutTitle", new Vector2(0, 300), 62, "DRAG TO MOVE");
-        _title.color = new Color(0.75f, 0.92f, 1f, 1f);
-        _sub = MakeText(font, "TutSub", new Vector2(0, 210), 34, "slide your finger anywhere");
-        _sub.color = new Color(0.8f, 0.88f, 1f, 0.8f);
+        // Sizes up ~20% and the subtitle nearly opaque: at 34pt / 0.8 alpha over a lit maze the
+        // second line was the thing testers said they could not read at all.
+        _title = MakeText(titleFont, "TutTitle", new Vector2(0, 300), 76, "DRAG TO MOVE");
+        _title.color = new Color(0.85f, 0.96f, 1f, 1f);
+        _title.characterSpacing = 8f;          // matches the spaced caps used everywhere else
+        _sub = MakeText(bodyFont, "TutSub", new Vector2(0, 200), 42, "slide your finger anywhere");
+        _sub.color = new Color(0.88f, 0.94f, 1f, 0.97f);
 
         // The mimed finger: a soft dot plus an expanding ripple for taps.
         var ripple = new GameObject("Ripple");

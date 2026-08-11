@@ -18,7 +18,7 @@ public class ProceduralAudio : MonoBehaviour
     private AudioSource _move;   // looping movement whoosh (volume rides speed)
 
     private AudioClip _ping, _tickClip, _star, _moveClip, _rewind, _lose, _timeWarn, _countTick;
-    private AudioClip _starLost, _starGained, _whoosh, _button, _teach, _exitHit;
+    private AudioClip _starLost, _starGained, _whoosh, _button, _teach, _exitHit, _wheelTick;
     private AudioClip _praise0, _praise1, _praise2, _praise3, _overcharge;
     private AudioSource _ui;     // own source so UI never cuts off a gameplay cue mid-play
     private float _moveTargetVol, _moveLevel;
@@ -54,6 +54,10 @@ public class ProceduralAudio : MonoBehaviour
         _whoosh     = BuildSweep(300f, 900f, 0.22f, 0.35f);   // level regenerated
         _button     = BuildSweep(1500f, 1900f, 0.035f, 0.30f); // dry UI click
         _teach      = BuildArpeggio(new[] { 659.25f, 880f }, 0.07f, 0.35f); // card appears
+        // Level-wheel detent. Shorter and softer than the button click so a fast flick through
+        // thirty levels is a texture rather than thirty separate clicks, and pitched a little above
+        // it so the two never read as the same event. Falling, so each notch sounds like it lands.
+        _wheelTick  = BuildSweep(2100f, 1650f, 0.022f, 0.22f);
 
         // Reaching the exit: a C4 bloom that bends into tune. Deliberately still ringing when the
         // praise sting lands ~0.4s later — it is the bass the sting resolves over, not a separate
@@ -110,10 +114,24 @@ public class ProceduralAudio : MonoBehaviour
     public void PlayWhoosh() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_whoosh, 0.5f); } }
 
     /// <summary>Every UI button. On its own source so it can never cut a gameplay cue short.</summary>
-    public void PlayButton() { if (_ui) { _ui.pitch = 1f; _ui.PlayOneShot(_button, 0.6f); } }
+    // Clip guarded as well as the source: this fires from menu chrome that can be driven before
+    // the clips finish building, and PlayOneShot(null) logs a warning every single press.
+    public void PlayButton() { if (_ui && _button) { _ui.pitch = 1f; _ui.PlayOneShot(_button, 0.6f); } }
 
     /// <summary>An explainer card appearing.</summary>
     public void PlayTeach() { if (_ui) { _ui.pitch = 1f; _ui.PlayOneShot(_teach, 0.7f); } }
+
+    /// <summary>
+    /// One detent of the level wheel. <paramref name="climb"/> nudges the pitch up as the number
+    /// rises and down as it falls, so scrolling has a direction you can hear — a flat repeated
+    /// blip is what makes a picker feel mechanical instead of tactile.
+    /// </summary>
+    public void PlayWheelTick(float climb)
+    {
+        if (!_ui || !_wheelTick) return;
+        _ui.pitch = Mathf.Clamp(1f + climb * 0.06f, 0.82f, 1.22f);
+        _ui.PlayOneShot(_wheelTick, 0.55f);
+    }
 
     public void PlayLose() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_lose, 0.8f); } }
     public void PlayTimeWarning() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_timeWarn, 0.5f); } }

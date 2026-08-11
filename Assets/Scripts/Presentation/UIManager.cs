@@ -14,6 +14,11 @@ public class UIManager : MonoBehaviour
     private TMP_FontAsset _tmpFont;      // HUD / body
     private TMP_FontAsset _displayFont;  // titles and headlines
 
+    /// <summary>Body typeface, for overlays built outside this class (the tutorial).</summary>
+    public TMP_FontAsset BodyFont => _tmpFont;
+    /// <summary>Display typeface, for overlays built outside this class (the tutorial).</summary>
+    public TMP_FontAsset TitleFont => _displayFont != null ? _displayFont : _tmpFont;
+
     /// <summary>
     /// Build an SDF font asset from a TTF in Resources. Generated at runtime so the project keeps
     /// no baked font assets; TMP renders it from a signed-distance field either way, so it stays
@@ -39,6 +44,20 @@ public class UIManager : MonoBehaviour
     private Canvas _canvas;
     private RectTransform _safe;
     private CanvasGroup _hudGroup;
+
+    private RectTransform _hudBlock;          // gameplay-touch dead zone over the readouts
+    private const float HudBlockHeight = 260f; // reference units; caption bottom is at -240
+
+    /// <summary>
+    /// True when a screen point is over the HUD readout band, where a drag or tap should belong to
+    /// the interface rather than to the player dot.
+    /// </summary>
+    public bool IsOverHud(Vector2 screenPos)
+    {
+        if (_hudBlock == null) return false;
+        // Screen-space-overlay canvas: pass a null camera, per RectTransformUtility's contract.
+        return RectTransformUtility.RectangleContainsScreenPoint(_hudBlock, screenPos, null);
+    }
 
     private TMP_Text _levelText, _timerText, _sectorText;
     private Image[] _hudStars;             // the live star row (lives), top-left
@@ -76,6 +95,7 @@ public class UIManager : MonoBehaviour
     private GameObject _teachPanel, _teachMarker;
     private RectTransform _teachCard;
     private Image _teachVeil, _teachFill, _teachFrame, _teachSwatch, _teachRing;
+    private CanvasGroup _teachGroup;     // fades the veil and card together on open/close
     private TMP_Text _teachTitle, _teachBody, _teachOkLabel, _teachMarkerLabel;
     private RectTransform _teachOkRT;
     private Button _teachOkBtn;
@@ -269,6 +289,20 @@ public class UIManager : MonoBehaviour
         _timerCaption = Text_("TimerCaption", _safe, new Vector2(0.5f, 1), new Vector2(0, -206), new Vector2(400, 34), 20, TextAnchor.UpperCenter, Spaced("SECONDS"));
         _timerCaption.color = new Color(0.6f, 0.78f, 0.92f, 0.55f);
 
+        // Invisible geometry probe over the whole HUD band (stars, level, clock, reveals). Gameplay
+        // asks this whether a touch landed on the readouts rather than the maze — every element up
+        // here has raycastTarget off so it can't be found by the normal UI hit test, which meant a
+        // thumb parked over the clock was still steering the player. Height covers the caption's
+        // bottom edge at -240 plus a margin. Anchored inside _safe so notches and scaling are
+        // Unity's problem, not arithmetic here.
+        var hudBlockGO = new GameObject("HudTouchBlock");
+        hudBlockGO.transform.SetParent(_safe, false);
+        _hudBlock = hudBlockGO.AddComponent<RectTransform>();
+        _hudBlock.anchorMin = new Vector2(0f, 1f); _hudBlock.anchorMax = new Vector2(1f, 1f);
+        _hudBlock.pivot = new Vector2(0.5f, 1f);
+        _hudBlock.offsetMin = new Vector2(0f, -HudBlockHeight);
+        _hudBlock.offsetMax = Vector2.zero;
+
         // Reveal counter (top-right): a number followed by a single circle icon, e.g. "10  o".
         _pingCountText = Text_("PingCount", _safe, new Vector2(1, 1), new Vector2(-82, -24), new Vector2(240, 74), 52, TextAnchor.UpperRight, "0");
         _pingCountText.color = DotFull;
@@ -303,6 +337,8 @@ public class UIManager : MonoBehaviour
         _gearInGame = BuildInGameGear();
         _startOverlay = BuildStart();
         _celebOverlay = BuildCeleb();
+        _failPanel = BuildFailPanel();
+        _levelPanel = BuildLevelSelect();
         _dailyResultPanel = BuildDailyResult();
         _settingsPanel = BuildSettings();   // built late so it draws above the menu
         _teachPanel = BuildTeachCard();     // later still — an explainer outranks everything
@@ -650,6 +686,8 @@ public class UIManager : MonoBehaviour
     {
         float dt = Time.unscaledDeltaTime; // keep the UI alive during hitstop (timeScale=0)
 
+        TickLevelSelect();   // wheel detents + snap; no-ops when the picker is closed
+
         // Teach card: the marker breathes so the eye is pulled to it, and re-tracks every frame
         // because the camera is never quite still (shake, punch-zoom, the menu's idle drift).
         if (TeachOpen)
@@ -663,9 +701,26 @@ public class UIManager : MonoBehaviour
                 var rc = _teachRing.color;
                 _teachRing.color = new Color(rc.r, rc.g, rc.b, 0.65f + 0.35f * Mathf.Sin(_teachT * 4.2f));
             }
-            // The card itself eases up on open so it doesn't just blink into existence.
-            float pop = Easing.OutBack(Mathf.Clamp01(_teachT / 0.28f));
-            _teachCard.localScale = Vector3.one * Mathf.Lerp(0.86f, 1f, pop);
+            // ---- open / close animation ----
+            // Deliberately short and snappy: 0.20s in, 0.13s out. Long enough to read as a move
+            // rather than a cut, short enough that a player dismissing five cards in a row never
+            // waits on it. Scale uses OutBack for the same overshoot the banners and buttons use.
+            if (_teachClosing)
+            {
+                _teachCloseT += dt;
+                float k = Mathf.Clamp01(_teachCloseT / TeachOutSeconds);
+                float ease = k * k;                 // ease-in: slow release, then it's gone
+                _teachGroup.alpha = 1f - ease;
+                _teachCard.localScale = Vector3.one * Mathf.Lerp(1f, 0.93f, ease);
+                if (k >= 1f) FinishTeachClose();
+            }
+            else
+            {
+                float pop = Easing.OutBack(Mathf.Clamp01(_teachT / TeachInSeconds));
+                _teachCard.localScale = Vector3.one * Mathf.Lerp(0.86f, 1f, pop);
+                // Alpha resolves faster than the scale so the card is readable while it settles.
+                _teachGroup.alpha = Mathf.Clamp01(_teachT / (TeachInSeconds * 0.65f));
+            }
 
             // OK counts down, then unlocks.
             if (_teachOkBtn != null && !_teachOkBtn.interactable)
@@ -1066,13 +1121,13 @@ public class UIManager : MonoBehaviour
         _startSub.color = new Color(0.62f, 0.78f, 0.92f, 0.85f);
 
         // Primary action.
-        var playBtn = Button_("PlayBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, 20), new Vector2(560, 150),
+        var playBtn = Button_("PlayBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, 60), new Vector2(560, 150),
                               Spaced("PLAY"), 58, Accent, true, out _playLabel);
         _playBtnRT = playBtn.GetComponent<RectTransform>();
         playBtn.onClick.AddListener(() => { if (OnPlay != null) OnPlay(); });
 
         // Secondary: the daily ritual, with its own streak flame.
-        _dailyBtn = Button_("DailyBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, -175), new Vector2(500, 116),
+        _dailyBtn = Button_("DailyBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, -120), new Vector2(500, 116),
                             "DAILY MAZE", 38, Gold, false, out _dailyLabel);
         _dailyBtn.onClick.AddListener(() => { if (OnDaily != null) OnDaily(); });
 
@@ -1100,9 +1155,16 @@ public class UIManager : MonoBehaviour
         crt2.sizeDelta = new Vector2(34, 34);
         checkGO.SetActive(false);
 
+        // Level picker. Sits under the daily so the default path down the menu is still
+        // PLAY -> DAILY; replaying an old maze is a deliberate detour, not the headline action.
+        TMP_Text levelsLbl;
+        var levelsBtn = Button_("LevelsBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, -270), new Vector2(500, 116),
+                                Spaced("LEVELS"), 38, Accent, false, out levelsLbl);
+        levelsBtn.onClick.AddListener(() => OpenLevelSelect(SaveData.CurrentLevel));
+
         // Settings gear.
         TMP_Text gearLabel;
-        var gearBtn = Button_("GearBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, -350), new Vector2(110, 110),
+        var gearBtn = Button_("GearBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, -430), new Vector2(110, 110),
                               "", 1, Accent, false, out gearLabel);
         gearBtn.onClick.AddListener(OpenSettings);
         var gearIcon = new GameObject("GearIcon");
@@ -1116,6 +1178,396 @@ public class UIManager : MonoBehaviour
 
         return go;
     }
+
+    // ---- Fail panel -------------------------------------------------------------------
+    // The fail state used to be a banner over a lit maze that auto-restarted after a fixed delay.
+    // Two things were wrong with that. The maze rendered straight through the words, so the one
+    // piece of information the player wanted ("how close was I?") was the hardest thing on screen
+    // to read; and the automatic restart meant the message vanished whether or not they had
+    // finished reading it. Now the maze is dimmed behind an opaque slab and nothing happens until
+    // the player asks for it.
+    private GameObject _failPanel;
+    private TMP_Text _failHead, _failSub;
+    private Button _failRetryBtn;
+    private System.Action _onFailRetry;
+
+    // ---- Level select ------------------------------------------------------------------
+    // A snapping wheel rather than a grid of buttons: the ladder is unbounded, so a grid would
+    // either need paging or would grow forever, and flicking to level 60 through a wheel is one
+    // gesture instead of six page taps.
+    private GameObject _levelPanel;
+    private ScrollRect _levelScroll;
+    private RectTransform _levelContent;
+    private readonly List<TMP_Text> _levelRows = new List<TMP_Text>();
+    private int _levelSelected = 1;
+    private bool _levelSnapping;
+    private float _levelSnapT;
+    private float _levelSnapFrom, _levelSnapTo;
+
+    private const float LevelRowH   = 132f;   // tall enough to be a comfortable flick target
+    private const int   LevelSelectMax = 200; // the sector names cycle well past this
+
+    /// <summary>Fired when the player confirms a level from the picker.</summary>
+    public System.Action<int> OnLevelChosen;
+
+    private GameObject BuildLevelSelect()
+    {
+        var go = new GameObject("LevelSelectOverlay");
+        go.transform.SetParent(_canvas.transform, false);
+        var panel = go.AddComponent<Image>();
+        // Fully opaque, unlike PanelSolid: this sits on top of the main menu, and at PanelSolid's
+        // alpha the CONTINUE/DAILY buttons read straight through the wheel. B/G is 2.1, inside the
+        // style rule for a flat field.
+        panel.color = new Color(0.012f, 0.016f, 0.034f, 1f); panel.raycastTarget = true;
+        var prt = panel.rectTransform;
+        prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one;
+        prt.offsetMin = Vector2.zero; prt.offsetMax = Vector2.zero;
+        var root = go.transform as RectTransform;
+
+        var title = Display(Text_("LvlTitle", root, new Vector2(0.5f, 0.5f), new Vector2(0, 700),
+                                  new Vector2(900, 110), 64, TextAnchor.MiddleCenter, Spaced("SELECT LEVEL")));
+        title.color = TitleText;
+        Neon(title, Accent, 0.8f);
+
+        // The lit band the wheel snaps into. Drawn under the rows so the numbers sit on top of it.
+        var bandGO = new GameObject("LvlBand");
+        bandGO.transform.SetParent(root, false);
+        var band = bandGO.AddComponent<Image>();
+        band.color = new Color(Accent.r, Accent.g, Accent.b, 0.10f);
+        band.raycastTarget = false;
+        var bandRT = band.rectTransform;
+        bandRT.anchorMin = bandRT.anchorMax = new Vector2(0.5f, 0.5f);
+        bandRT.pivot = new Vector2(0.5f, 0.5f);
+        bandRT.anchoredPosition = new Vector2(0, 40);
+        bandRT.sizeDelta = new Vector2(720, LevelRowH);
+
+        var bandFrameGO = new GameObject("LvlBandFrame");
+        bandFrameGO.transform.SetParent(root, false);
+        var bandFrame = bandFrameGO.AddComponent<Image>();
+        bandFrame.sprite = _brackets; bandFrame.type = Image.Type.Sliced; bandFrame.raycastTarget = false;
+        bandFrame.color = new Color(Accent.r, Accent.g, Accent.b, 0.85f);
+        var bfRT = bandFrame.rectTransform;
+        bfRT.anchorMin = bfRT.anchorMax = new Vector2(0.5f, 0.5f); bfRT.pivot = new Vector2(0.5f, 0.5f);
+        bfRT.anchoredPosition = new Vector2(0, 40);
+        bfRT.sizeDelta = new Vector2(760, LevelRowH + 30f);
+
+        // Viewport clips the wheel to a few rows either side of the band.
+        var viewGO = new GameObject("LvlViewport");
+        viewGO.transform.SetParent(root, false);
+        var viewImg = viewGO.AddComponent<Image>();
+        // Invisible but still raycastable — Image hit-tests against its rect, not its alpha, so a
+        // fully transparent graphic still catches the drag.
+        viewImg.color = new Color(0, 0, 0, 0f);
+        // RectMask2D, NOT Mask. Mask builds its stencil from the graphic's ALPHA, so pairing it
+        // with a transparent viewport image masks the entire wheel away — the rows were laid out
+        // correctly and clipped into nothing. RectMask2D clips to the rectangle and ignores alpha.
+        viewGO.AddComponent<RectMask2D>();
+        var viewRT = viewImg.rectTransform;
+        viewRT.anchorMin = viewRT.anchorMax = new Vector2(0.5f, 0.5f);
+        viewRT.pivot = new Vector2(0.5f, 0.5f);
+        viewRT.anchoredPosition = new Vector2(0, 40);
+        viewRT.sizeDelta = new Vector2(860, LevelRowH * 5f);
+
+        var contentGO = new GameObject("LvlContent");
+        contentGO.transform.SetParent(viewRT, false);
+        _levelContent = contentGO.AddComponent<RectTransform>();
+        _levelContent.anchorMin = new Vector2(0.5f, 1f);
+        _levelContent.anchorMax = new Vector2(0.5f, 1f);
+        _levelContent.pivot = new Vector2(0.5f, 1f);
+        _levelContent.sizeDelta = new Vector2(860, LevelRowH * LevelSelectMax + LevelRowH * 4f);
+
+        _levelScroll = go.AddComponent<ScrollRect>();
+        _levelScroll.content = _levelContent;
+        _levelScroll.viewport = viewRT;
+        _levelScroll.horizontal = false;
+        _levelScroll.vertical = true;
+        _levelScroll.movementType = ScrollRectMovementType();
+        _levelScroll.scrollSensitivity = 40f;
+        _levelScroll.decelerationRate = 0.135f;
+
+        // Rows. Two blank rows of padding at each end so level 1 and the last level can both reach
+        // the centre band instead of stopping short at the top or bottom of the scroll range.
+        for (int i = 0; i < LevelSelectMax; i++)
+        {
+            int lvl = i + 1;
+            var t = Display(Text_("Lvl" + lvl, _levelContent, new Vector2(0.5f, 1f),
+                                  new Vector2(0, -(LevelRowH * (i + 2) + LevelRowH * 0.5f)),
+                                  new Vector2(820, LevelRowH), 64, TextAnchor.MiddleCenter,
+                                  lvl.ToString()));
+            t.raycastTarget = false;
+            _levelRows.Add(t);
+        }
+
+
+        // Viewport spans -290..370, so the caption clears its bottom edge and the buttons clear
+        // the caption. Everything below is stacked, not overlapped.
+        _levelSubLabel = Text_("LvlSub", root, new Vector2(0.5f, 0.5f), new Vector2(0, -350),
+                               new Vector2(900, 60), 32, TextAnchor.MiddleCenter, "");
+        _levelSubLabel.color = new Color(0.62f, 0.78f, 0.92f, 0.9f);
+
+        TMP_Text goLbl;
+        var goBtn = Button_("LvlGo", root, new Vector2(0.5f, 0.5f), new Vector2(0, -480),
+                            new Vector2(520, 140), Spaced("PLAY"), 50, Accent, true, out goLbl);
+        goBtn.onClick.AddListener(() =>
+        {
+            int lvl = _levelSelected;
+            CloseLevelSelect();
+            if (OnLevelChosen != null) OnLevelChosen(lvl);
+        });
+
+        TMP_Text backLbl;
+        var backBtn = Button_("LvlBack", root, new Vector2(0.5f, 0.5f), new Vector2(0, -640),
+                              new Vector2(420, 110), Spaced("BACK"), 36, Accent, false, out backLbl);
+        backBtn.onClick.AddListener(CloseLevelSelect);
+
+        go.SetActive(false);
+        return go;
+    }
+
+    private TMP_Text _levelSubLabel;
+
+    // Elastic would let the wheel bounce past the padding rows and settle off-centre; clamped keeps
+    // every row reachable and the snap arithmetic honest.
+    private static ScrollRect.MovementType ScrollRectMovementType() => ScrollRect.MovementType.Clamped;
+
+    public bool LevelSelectOpen => _levelPanel != null && _levelPanel.activeSelf;
+
+    /// <summary>
+    /// Highest level the wheel will offer. Everything the player has reached — i.e. every level
+    /// they have cleared, plus the one they are currently on. Levels beyond this are not shown at
+    /// all rather than shown locked: a wall of greyed-out numbers is just noise on a ladder that
+    /// has no end.
+    /// </summary>
+    private int _levelUnlocked = 1;
+    private int _levelOpenedAt = 1;   // reference point for the wheel tick's pitch ramp
+
+    public void OpenLevelSelect(int startAt)
+    {
+        if (_levelPanel == null) return;
+        _levelUnlocked = Mathf.Clamp(SaveData.CurrentLevel, 1, LevelSelectMax);
+        _levelSelected = Mathf.Clamp(startAt, 1, _levelUnlocked);
+        _levelOpenedAt = _levelSelected;
+        // Shrink the scrollable range to the unlocked span, otherwise the wheel keeps flinging
+        // into 190 rows of empty space past the player's progress. Height = the offset needed to
+        // put the last unlocked row on the band (RowH*(n-1)) plus one viewport (5 rows).
+        _levelContent.sizeDelta = new Vector2(_levelContent.sizeDelta.x, LevelRowH * (_levelUnlocked + 4));
+        _levelPanel.SetActive(true);
+        _levelPanel.transform.SetAsLastSibling();
+        _levelSnapping = false;
+        // Jump straight to the level they're on, so the common case is zero scrolling.
+        _levelContent.anchoredPosition = new Vector2(0, RowOffset(_levelSelected));
+        RefreshLevelRows();
+        if (Audio != null) Audio.PlayButton();
+    }
+
+    public void CloseLevelSelect()
+    {
+        if (_levelPanel != null) _levelPanel.SetActive(false);
+        if (Audio != null) Audio.PlayButton();
+    }
+
+    /// <summary>
+    /// Content Y that puts <paramref name="level"/> under the centre band.
+    ///
+    /// Derivation, because an off-by-one here silently parks the whole wheel outside the viewport:
+    /// content is top-pivoted against the viewport's top edge, so a row whose local centre is at
+    /// -Y draws at (viewportTop - Y + offset). Row i sits at -(RowH*(i+2) + RowH/2) thanks to the
+    /// two padding rows, and the band is at the viewport's middle, viewportTop - H/2 with H = 5*RowH.
+    /// Solving for offset collapses the constants and leaves exactly RowH * i, i.e. RowH*(level-1).
+    /// </summary>
+    private float RowOffset(int level) => LevelRowH * (level - 1);
+
+    /// <summary>Which level is currently nearest the band. Inverse of RowOffset.</summary>
+    private int NearestRow()
+    {
+        float y = _levelContent.anchoredPosition.y;
+        return Mathf.Clamp(Mathf.RoundToInt(y / LevelRowH) + 1, 1, _levelUnlocked);
+    }
+
+    /// <summary>Recolour rows by distance from the band and update the caption.</summary>
+    private void RefreshLevelRows()
+    {
+        for (int i = 0; i < _levelRows.Count; i++)
+        {
+            int lvl = i + 1;
+            int d = Mathf.Abs(lvl - _levelSelected);
+            // Locked levels are never drawn, so the wheel visibly ends at the player's progress.
+            if (d > 3 || lvl > _levelUnlocked)
+            { if (_levelRows[i].enabled) _levelRows[i].enabled = false; continue; }
+            _levelRows[i].enabled = true;
+
+            // The centre row is the selection; neighbours fade out fast so the wheel reads as
+            // having one active value rather than seven equally-live options.
+            float a = d == 0 ? 1f : Mathf.Max(0.10f, 0.42f - (d - 1) * 0.12f);
+            float s = d == 0 ? 1.18f : 1f - Mathf.Min(0.18f, d * 0.06f);
+            _levelRows[i].color = d == 0 ? new Color(0.9f, 0.98f, 1f, 1f)
+                                         : new Color(0.62f, 0.78f, 0.92f, a);
+            _levelRows[i].transform.localScale = Vector3.one * s;
+        }
+
+        if (_levelSubLabel != null)
+        {
+            int sector = GameConfig.SectorIndex(_levelSelected) + 1;
+            _levelSubLabel.text = "SECTOR " + sector + "  ·  " + GameConfig.SectorName(_levelSelected);
+        }
+    }
+
+    /// <summary>Wheel physics: track the drag, then ease into the nearest row when it settles.</summary>
+    private bool _levelGlyphFixed;
+
+    /// <summary>
+    /// TMP centres the LINE BOX, not the visible glyph, so the digits draw measurably below their
+    /// rect centre (66px at this size) and the selected number straddled the band instead of
+    /// sitting in it. Measure the real offset off a laid-out row and shift every row by it.
+    ///
+    /// This has to run once the panel is actually visible: attempted at build time, the rows have
+    /// not been through a layout pass yet, ForceMeshUpdate reports bounds around the origin, and
+    /// the correction silently computes as zero. Measuring beats hard-coding 66 because the number
+    /// is a function of the font and the row size, either of which may change later.
+    /// </summary>
+    private void FixLevelRowGlyphOffset()
+    {
+        if (_levelGlyphFixed || _levelRows.Count == 0) return;
+        var probe = _levelRows[0];
+        probe.ForceMeshUpdate();
+        float glyphDy = probe.textBounds.center.y;     // negative = glyph sits low in its rect
+        if (Mathf.Abs(glyphDy) < 0.5f) return;         // not laid out yet — try again next frame
+
+        // Written as an ABSOLUTE placement recomputed from the row index, not as a relative nudge.
+        // A relative shift is only correct if it runs exactly once, and the guard flag is a private
+        // non-serialized bool that an Editor domain reload silently resets — which double-applied
+        // the correction and put every row a full 132px out. Recomputing from the index makes
+        // running this twice a no-op.
+        for (int i = 0; i < _levelRows.Count; i++)
+        {
+            var rt = _levelRows[i].rectTransform;
+            float nominal = -(LevelRowH * (i + 2) + LevelRowH * 0.5f);
+            rt.anchoredPosition = new Vector2(rt.anchoredPosition.x, nominal - glyphDy);
+        }
+        _levelGlyphFixed = true;
+    }
+
+    private void TickLevelSelect()
+    {
+        if (_levelPanel == null || !_levelPanel.activeSelf) return;
+        FixLevelRowGlyphOffset();
+
+        if (_levelSnapping)
+        {
+            _levelSnapT += Time.unscaledDeltaTime / 0.18f;
+            float k = Easing.OutCubic(Mathf.Clamp01(_levelSnapT));
+            _levelContent.anchoredPosition = new Vector2(0, Mathf.Lerp(_levelSnapFrom, _levelSnapTo, k));
+            if (_levelSnapT >= 1f) _levelSnapping = false;
+            return;
+        }
+
+        int near = NearestRow();
+        if (near != _levelSelected)
+        {
+            // Pitch tracks how far this notch is from where the wheel opened, so a long flick
+            // rises or falls instead of repeating one flat blip.
+            float climb = Mathf.Clamp(near - _levelOpenedAt, -6f, 6f);
+            _levelSelected = near;
+            RefreshLevelRows();
+            Haptics.Selection();          // the wheel should feel like it has detents
+            if (Audio != null) Audio.PlayWheelTick(climb);
+        }
+
+        // Once the fling has died down, pull the nearest row exactly onto the band.
+        bool settled = Mathf.Abs(_levelScroll.velocity.y) < 40f && !EchoInput.PointerHeld;
+        float target = RowOffset(_levelSelected);
+        if (settled && Mathf.Abs(_levelContent.anchoredPosition.y - target) > 0.5f)
+        {
+            _levelScroll.velocity = Vector2.zero;
+            _levelSnapping = true;
+            _levelSnapT = 0f;
+            _levelSnapFrom = _levelContent.anchoredPosition.y;
+            _levelSnapTo = target;
+        }
+    }
+
+
+    private GameObject BuildFailPanel()
+    {
+        var go = new GameObject("FailOverlay");
+        go.transform.SetParent(_canvas.transform, false);
+        var scrim = go.AddComponent<Image>();
+        // Near-opaque on purpose. The revealed maze has already had its moment before this appears;
+        // from here on it is background texture, not something to read through.
+        scrim.color = new Color(0.010f, 0.014f, 0.032f, 0.90f);
+        scrim.raycastTarget = true;         // swallow taps so the maze can't be played behind it
+        var srt = scrim.rectTransform;
+        srt.anchorMin = Vector2.zero; srt.anchorMax = Vector2.one;
+        srt.offsetMin = Vector2.zero; srt.offsetMax = Vector2.zero;
+        var root = go.transform as RectTransform;
+
+        // Slab behind the copy, so the headline never sits directly on maze geometry.
+        var slabGO = new GameObject("FailSlab");
+        slabGO.transform.SetParent(root, false);
+        var slab = slabGO.AddComponent<Image>();
+        slab.color = PanelSolid; slab.raycastTarget = false;
+        var slrt = slab.rectTransform;
+        slrt.anchorMin = slrt.anchorMax = new Vector2(0.5f, 0.5f); slrt.pivot = new Vector2(0.5f, 0.5f);
+        slrt.anchoredPosition = new Vector2(0, 60); slrt.sizeDelta = new Vector2(940, 460);
+
+        var frameGO = new GameObject("FailFrame");
+        frameGO.transform.SetParent(root, false);
+        var frame = frameGO.AddComponent<Image>();
+        frame.sprite = _brackets; frame.type = Image.Type.Sliced; frame.raycastTarget = false;
+        frame.color = new Color(Danger.r, Danger.g, Danger.b, 0.9f);
+        var frt2 = frame.rectTransform;
+        frt2.anchorMin = frt2.anchorMax = new Vector2(0.5f, 0.5f); frt2.pivot = new Vector2(0.5f, 0.5f);
+        frt2.anchoredPosition = new Vector2(0, 60); frt2.sizeDelta = new Vector2(960, 480);
+
+        _failHead = Display(Text_("FailHead", root, new Vector2(0.5f, 0.5f), new Vector2(0, 190),
+                                  new Vector2(900, 110), 74, TextAnchor.MiddleCenter, ""));
+        _failHead.color = Danger;
+        Neon(_failHead, Danger, 0.8f);
+
+        _failSub = Text_("FailSub", root, new Vector2(0.5f, 0.5f), new Vector2(0, 60),
+                         new Vector2(840, 160), 44, TextAnchor.MiddleCenter, "");
+        _failSub.color = new Color(0.92f, 0.95f, 1f, 0.96f);
+        _failSub.textWrappingMode = TextWrappingModes.Normal;
+
+        TMP_Text retryLbl;
+        _failRetryBtn = Button_("FailRetry", root, new Vector2(0.5f, 0.5f), new Vector2(0, -110),
+                                new Vector2(480, 132), Spaced("RETRY"), 46, Accent, true, out retryLbl);
+        _failRetryBtn.onClick.AddListener(() =>
+        {
+            // One shot. Without this the player can land three taps on the button while the
+            // rebuild coroutine is still running, stacking resets and stranding the screen black.
+            if (!_failRetryBtn.interactable) return;
+            _failRetryBtn.interactable = false;
+            var cb = _onFailRetry; _onFailRetry = null;
+            if (cb != null) cb();
+        });
+
+        go.SetActive(false);
+        return go;
+    }
+
+    /// <summary>
+    /// Show the fail screen and wait. Nothing rebuilds until <paramref name="onRetry"/> fires from
+    /// the button, so the player reads the result on their own clock.
+    /// </summary>
+    public void ShowFailPanel(string headline, string detail, System.Action onRetry)
+    {
+        if (_failPanel == null) return;
+        _onFailRetry = onRetry;
+        _failHead.text = Spaced(headline);
+        _failSub.text = detail;
+        _failRetryBtn.interactable = true;
+        _failPanel.SetActive(true);
+        _failPanel.transform.SetAsLastSibling();   // above the HUD and any lingering banner
+    }
+
+    public void HideFailPanel()
+    {
+        if (_failPanel != null) _failPanel.SetActive(false);
+        _onFailRetry = null;
+    }
+
+    public bool FailPanelOpen => _failPanel != null && _failPanel.activeSelf;
 
     private GameObject BuildCeleb()
     {
@@ -1138,8 +1590,13 @@ public class UIManager : MonoBehaviour
         cgrt.anchorMin = cgrt.anchorMax = new Vector2(0.5f, 0.5f); cgrt.pivot = new Vector2(0.5f, 0.5f);
         cgrt.anchoredPosition = new Vector2(0, 230); cgrt.sizeDelta = new Vector2(1100, 520);
 
-        _celebTitle = Display(Text_("CTitle", go.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 260), new Vector2(1040, 160), 68, TextAnchor.MiddleCenter, Spaced("LEVEL CLEAR")));
+        _celebTitle = Display(Text_("CTitle", go.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 260), new Vector2(980, 160), 68, TextAnchor.MiddleCenter, Spaced("LEVEL CLEAR")));
         _celebTitle.color = TitleText;
+        // Same treatment as the praise line. "LEVEL 4 CLEAR" already fills the width once spaced,
+        // and the ladder has no ceiling — "LEVEL 100 CLEAR" is two glyphs longer again.
+        _celebTitle.enableAutoSizing = true;
+        _celebTitle.fontSizeMax = 68f;
+        _celebTitle.fontSizeMin = 40f;
         Neon(_celebTitle, Accent, 0.85f);
 
         // Warm bloom under the praise word.
@@ -1157,9 +1614,17 @@ public class UIManager : MonoBehaviour
         // what survived reads as a grade on a test the player didn't sit, and testers said it
         // meant nothing to them. A single word of praise is the reward instead: it lands faster,
         // varies run to run, and doesn't invite the player to feel they underperformed.
+        // Auto-sized, because the praise pool is variable-length and Spaced() roughly doubles it:
+        // "FULL SPECTRUM" becomes a 25-character string, which at a fixed 82pt ran off both edges
+        // of the screen. Short words like "PHEW!" still get the full 82; only the long ones shrink.
+        // The box is 940 rather than the screen's 1080 so the settle wobble (peaks at 1.055x) has
+        // somewhere to go: 940 * 1.055 = 992, still inside 1080.
         _celebPraise = Display(Text_("CPraise", go.transform as RectTransform, new Vector2(0.5f, 0.5f),
-                              new Vector2(0, 90), new Vector2(1040, 150), 82, TextAnchor.MiddleCenter, ""));
+                              new Vector2(0, 90), new Vector2(940, 150), 82, TextAnchor.MiddleCenter, ""));
         _celebPraise.color = Gold;
+        _celebPraise.enableAutoSizing = true;
+        _celebPraise.fontSizeMax = 82f;
+        _celebPraise.fontSizeMin = 44f;
         Neon(_celebPraise, Gold, 0.9f);
         _celebPraise.transform.localScale = Vector3.zero;
 
@@ -1289,6 +1754,16 @@ public class UIManager : MonoBehaviour
     }
 
     private Button _settingsHomeBtn;
+    private Button _resetBtn;
+
+    /// <summary>
+    /// Enable/disable the HUD RETRY button. Held off while a rebuild is in flight so the press
+    /// cannot be repeated into the coroutine that is already covering the screen.
+    /// </summary>
+    public void SetResetInteractable(bool on)
+    {
+        if (_resetBtn != null) _resetBtn.interactable = on;
+    }
 
     // ---------- in-game gear ----------
 
@@ -1317,6 +1792,7 @@ public class UIManager : MonoBehaviour
         var resetBtn = Button_("ResetLevelBtn", _safe, new Vector2(0f, 0f), new Vector2(238, 80),
                                new Vector2(190, 96), Spaced("RETRY"), 28, Accent, false, out resetLbl);
         resetBtn.onClick.AddListener(() => { if (OnResetLevel != null) OnResetLevel(); });
+        _resetBtn = resetBtn;
 
         // HOME lives in the settings panel, not out here. Quitting a level is a rare, deliberate
         // action and it sat one thumb-width from the play area; RETRY earns its place on the HUD
@@ -1355,6 +1831,10 @@ public class UIManager : MonoBehaviour
     {
         var go = new GameObject("TeachCard");
         go.transform.SetParent(_canvas.transform, false);
+        // One CanvasGroup over the whole overlay so the veil and the card fade together. Without
+        // it the card scaled up but everything snapped to full opacity on frame one, which is what
+        // made an explainer read as "blinking into existence" no matter how nice the scale curve was.
+        _teachGroup = go.AddComponent<CanvasGroup>();
         _teachVeil = go.AddComponent<Image>();
         _teachVeil.color = PanelVeil;
         _teachVeil.raycastTarget = true;    // swallows gameplay taps while the card is up
@@ -1402,12 +1882,16 @@ public class UIManager : MonoBehaviour
         swrt.anchorMin = swrt.anchorMax = new Vector2(0.5f, 0.5f); swrt.pivot = new Vector2(0.5f, 0.5f);
         swrt.anchoredPosition = new Vector2(0, 178); swrt.sizeDelta = new Vector2(76, 76);
 
+        // Type sizes up hard (54->66 title, 38->48 body). Playtesters were not misreading these
+        // cards, they were declining to read them — at 38pt the body scanned as a paragraph of
+        // filler rather than a rule of the game. Bigger text with fewer words per line is what
+        // makes an explainer feel like something worth stopping for.
         _teachTitle = Display(Text_("TeachTitle", _teachCard, new Vector2(0.5f, 0.5f), new Vector2(0, 88),
-                                    new Vector2(860, 80), 54, TextAnchor.MiddleCenter, ""));
+                                    new Vector2(880, 96), 66, TextAnchor.MiddleCenter, ""));
 
         _teachBody = Text_("TeachBody", _teachCard, new Vector2(0.5f, 0.5f), new Vector2(0, -30),
-                           new Vector2(760, 200), 38, TextAnchor.MiddleCenter, "");
-        _teachBody.color = new Color(0.86f, 0.93f, 1f, 0.95f);
+                           new Vector2(TeachBodyW, 200), 48, TextAnchor.MiddleCenter, "");
+        _teachBody.color = new Color(0.93f, 0.97f, 1f, 1f);
         _teachBody.textWrappingMode = TextWrappingModes.Normal;   // body copy, unlike every readout
         _teachBody.overflowMode = TextOverflowModes.Overflow;
 
@@ -1447,10 +1931,10 @@ public class UIManager : MonoBehaviour
     // is the only variable-height element and a fixed card silently overflowed it into the title
     // and the OK button the moment the copy ran past three lines.
     private const float TeachPad    = 46f;
-    private const float TeachWidth  = 900f;
-    private const float TeachBodyW  = 760f;
+    private const float TeachWidth  = 950f;   // widened with the type bump so 48pt doesn't over-wrap
+    private const float TeachBodyW  = 840f;
     private const float TeachSwatch = 72f;
-    private const float TeachTitleH = 76f;
+    private const float TeachTitleH = 90f;    // fits the 66pt title without clipping descenders
     private const float TeachOkH    = 118f;
     private const float TeachGapS   = 26f;   // swatch -> title
     private const float TeachGapT   = 24f;   // title  -> body
@@ -1579,13 +2063,39 @@ public class UIManager : MonoBehaviour
             _teachOkLabel.color = new Color(1f, 1f, 1f, 0.45f);
         }
 
+        _teachClosing = false;
+        _teachCloseT = 0f;
+        if (_teachGroup != null) _teachGroup.alpha = 0f;   // Update fades it up from here
+        _teachCard.localScale = Vector3.one * 0.86f;
         _teachPanel.SetActive(true);
         Haptics.Medium();
         if (Audio != null) Audio.PlayTeach();
     }
 
+    private const float TeachInSeconds  = 0.20f;
+    private const float TeachOutSeconds = 0.13f;
+    private bool  _teachClosing;
+    private float _teachCloseT;
+
+    /// <summary>
+    /// Begin the dismiss animation. The close callback is deliberately deferred to the END of the
+    /// outro (see FinishTeachClose) — the tutorial chains cards back to back, and firing it
+    /// immediately would open the next card on top of the one still fading out.
+    /// </summary>
     private void CloseTeachCard()
     {
+        if (_teachPanel == null || !_teachPanel.activeSelf) return;
+        if (_teachClosing) return;               // ignore a second OK press mid-dismiss
+        _teachClosing = true;
+        _teachCloseT = 0f;
+        if (_teachOkBtn != null) _teachOkBtn.interactable = false;
+    }
+
+    private void FinishTeachClose()
+    {
+        _teachClosing = false;
+        if (_teachGroup != null) _teachGroup.alpha = 1f;   // reset for the next card
+        if (_teachCard != null) _teachCard.localScale = Vector3.one;
         if (_teachPanel != null) _teachPanel.SetActive(false);
         var cb = _onTeachClosed;
         _onTeachClosed = null;      // cleared BEFORE invoking, so a callback that opens another
@@ -1609,6 +2119,13 @@ public class UIManager : MonoBehaviour
     {
         _onTeachClosed = null;
         _pendingBanner = null;   // bailing out of the level; a held banner is stale now
+        // Hard hide, no outro: this is the "abandon the level" path, and animating a card the
+        // player is walking away from just delays the menu. Reset the animation state so the next
+        // card doesn't inherit a half-faded group.
+        _teachClosing = false;
+        _teachCloseT = 0f;
+        if (_teachGroup != null) _teachGroup.alpha = 1f;
+        if (_teachCard != null) _teachCard.localScale = Vector3.one;
         if (_teachPanel != null) _teachPanel.SetActive(false);
     }
 
