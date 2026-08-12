@@ -87,6 +87,7 @@ public class UIManager : MonoBehaviour
     private RectTransform _playBtnRT;
     private Button _dailyBtn;
     private TMP_Text _dailyLabel;
+    private TMP_Text _streakText;   // consecutive-day streak + what it currently pays out
     private Image _dailyFlame;
     private Image _dailyCheck;
     private GameObject _settingsPanel, _dailyResultPanel;
@@ -139,7 +140,7 @@ public class UIManager : MonoBehaviour
             return _hudStars[Mathf.Min(GameConfig.MaxStars / 2, _hudStars.Length - 1)].rectTransform;
         }
     }
-    private TMP_Text _soundLabel, _hapticsLabel, _dailyResultText;
+    private TMP_Text _soundLabel, _hapticsLabel, _notifLabel, _dailyResultText;
     private GameObject _gearInGame;
 
     private GameObject _startOverlay, _celebOverlay;
@@ -514,6 +515,22 @@ public class UIManager : MonoBehaviour
         }
         else _startSub.text = "Drag to move   •   Tap to ping";
         if (_playLabel != null) _playLabel.text = Spaced(currentLevel > 1 ? "CONTINUE" : "PLAY");
+
+        // Name the streak and — the part that was missing entirely — what it is paying out. The
+        // bonus reveals were granted silently, so players received a reward they never knew they
+        // had earned and could not tell they were about to lose.
+        if (_streakText != null)
+        {
+            int bonus = Mathf.Min(GameConfig.DailyBonusPingsMax, Mathf.Max(0, dayStreak - 1));
+            if (dayStreak >= 2)
+                _streakText.text = dayStreak + "-DAY STREAK"
+                                 + (bonus > 0 ? "   ·   +" + bonus + " reveal" + (bonus == 1 ? "" : "s") + " next level" : "");
+            else
+                _streakText.text = "Play tomorrow to start a streak";
+            _streakText.color = dayStreak >= 2
+                ? GameConfig.StreakColor
+                : new Color(0.55f, 0.62f, 0.72f, 0.8f);
+        }
 
         // Daily button reflects today's state at a glance, and locks once it's been played —
         // one attempt per day is what makes the daily meaningful.
@@ -1120,6 +1137,16 @@ public class UIManager : MonoBehaviour
         _startSub = Text_("Sub", root, new Vector2(0.5f, 0.5f), new Vector2(0, 250), new Vector2(1000, 260), 30, TextAnchor.MiddleCenter, "");
         _startSub.color = new Color(0.62f, 0.78f, 0.92f, 0.85f);
 
+        // The streak line. The game has tracked a consecutive-day streak since forever and spends
+        // it on bonus reveals, but the only thing the player could see was an alpha ramp on a glow
+        // behind the DAILY button — so nobody knew a streak existed, what it was worth, or that
+        // skipping a day would cost them anything. A streak nobody can see cannot motivate anyone.
+        // y=205 leaves ~40px of air above CONTINUE (whose top edge is 135). At 178 the line sat
+        // 13px off the button and read as part of it rather than as its own status.
+        _streakText = Text_("StreakLine", root, new Vector2(0.5f, 0.5f), new Vector2(0, 205),
+                            new Vector2(1000, 60), 28, TextAnchor.MiddleCenter, "");
+        _streakText.color = GameConfig.StreakColor;
+
         // Primary action.
         var playBtn = Button_("PlayBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, 60), new Vector2(560, 150),
                               Spaced("PLAY"), 58, Accent, true, out _playLabel);
@@ -1656,6 +1683,11 @@ public class UIManager : MonoBehaviour
         _soundLabel.color = SaveData.SoundOn ? OnState : OffState;
         _hapticsLabel.text = "VIBRATION   " + (SaveData.HapticsOn ? "ON" : "OFF");
         _hapticsLabel.color = SaveData.HapticsOn ? OnState : OffState;
+        if (_notifLabel != null)
+        {
+            _notifLabel.text = "REMINDERS   " + (GameNotifications.Enabled ? "ON" : "OFF");
+            _notifLabel.color = GameNotifications.Enabled ? OnState : OffState;
+        }
     }
 
     private GameObject BuildSettings()
@@ -1708,6 +1740,20 @@ public class UIManager : MonoBehaviour
             // The platform's success pattern rather than a single tap: distinctive enough that
             // the player can tell "the game buzzed" from "something else on the phone buzzed".
             if (SaveData.HapticsOn) Haptics.Success();
+        });
+
+        // Reminders. Third row down at the same 155 spacing. A player who wants the game but not
+        // the nudges needs somewhere to say so that isn't the OS settings app — burying that choice
+        // is how an app gets its notifications muted wholesale instead of tuned.
+        var notifBtn = Button_("NotifBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, -18), new Vector2(700, 120),
+                               "", 38, Accent, false, out _notifLabel);
+        notifBtn.onClick.AddListener(() =>
+        {
+            GameNotifications.Enabled = !GameNotifications.Enabled;
+            RefreshSettingLabels();
+            // Turning it ON is the moment to ask, if we never got permission (or they said no
+            // before). Turning it off just cancels — GameNotifications.Enabled handles that.
+            if (GameNotifications.Enabled) GameNotifications.RequestPermission();
         });
 
         // A long-press on the vibration row runs the full ladder and prints the platform report.

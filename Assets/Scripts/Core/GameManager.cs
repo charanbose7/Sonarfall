@@ -920,7 +920,13 @@ public class GameManager : MonoBehaviour
         // On a level ladder there is no run to end, so the only way to unlock the Daily was to LOSE
         // a level: clear level 1 and it stayed locked, fail it and it opened. Winning is the more
         // obvious qualification of the two.
+        bool firstEverClear = !_isDaily && !SaveData.RunFinished;
         if (!_isDaily) SaveData.MarkRunFinished();
+
+        // Ask for notification permission here and nowhere else. Prompting on first launch is the
+        // reliable way to earn a permanent denial from someone with no reason to say yes yet; the
+        // moment after a first win is when the app has actually made its case.
+        if (firstEverClear) GameNotifications.RequestPermission();
 
         // ---- Immediate impact ----
         // Your own ping, coming back. The cue that used to be here was a C5-E5-G5-C6 arpeggio and
@@ -1044,10 +1050,13 @@ public class GameManager : MonoBehaviour
         // route that was missed, and a panel drawn over it defeats that.
         yield return new WaitForSecondsRealtime(GameConfig.FailRevealTime);
 
-        // The daily allows one attempt — failing ends it.
+        // Failing the daily no longer burns the day. It used to call CompleteDaily(0), which locked
+        // the button to "DAILY DONE" — so a player who died eight seconds in had nothing left to
+        // come back for, and the one feature built specifically to pull them in tomorrow punished
+        // them for showing up today. The single-attempt tension lives in the CLEAR being recorded
+        // once, not in a loss consuming the whole day.
         if (_isDaily)
         {
-            SaveData.CompleteDaily(0);
             _ui.ShowDailyResult(false, 0, _dayStreak, false);
             State = GameState.Start;
             yield break;
@@ -1234,5 +1243,17 @@ public class GameManager : MonoBehaviour
     private void OnApplicationPause(bool paused)
     {
         AudioListener.pause = paused; // mute cleanly when backgrounded; timer naturally halts
+
+        // Reminders are rebuilt every time the app leaves the foreground and wiped every time it
+        // returns, so they always reflect the current save and can never fire at someone who is
+        // already playing.
+        if (paused) GameNotifications.OnAppBackground();
+        else        GameNotifications.OnAppForeground();
+    }
+
+    /// <summary>Android "back to home" and desktop quit both land here, not in OnApplicationPause.</summary>
+    private void OnApplicationQuit()
+    {
+        GameNotifications.OnAppBackground();
     }
 }
