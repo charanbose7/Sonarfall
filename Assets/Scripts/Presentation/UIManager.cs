@@ -1535,7 +1535,8 @@ public class UIManager : MonoBehaviour
         slab.color = PanelSolid; slab.raycastTarget = false;
         var slrt = slab.rectTransform;
         slrt.anchorMin = slrt.anchorMax = new Vector2(0.5f, 0.5f); slrt.pivot = new Vector2(0.5f, 0.5f);
-        slrt.anchoredPosition = new Vector2(0, 60); slrt.sizeDelta = new Vector2(940, 460);
+        // Grown and re-centred to hold two actions (RETRY + LEVELS) rather than one.
+        slrt.anchoredPosition = new Vector2(0, -30); slrt.sizeDelta = new Vector2(940, 620);
 
         var frameGO = new GameObject("FailFrame");
         frameGO.transform.SetParent(root, false);
@@ -1544,7 +1545,7 @@ public class UIManager : MonoBehaviour
         frame.color = new Color(Danger.r, Danger.g, Danger.b, 0.9f);
         var frt2 = frame.rectTransform;
         frt2.anchorMin = frt2.anchorMax = new Vector2(0.5f, 0.5f); frt2.pivot = new Vector2(0.5f, 0.5f);
-        frt2.anchoredPosition = new Vector2(0, 60); frt2.sizeDelta = new Vector2(960, 480);
+        frt2.anchoredPosition = new Vector2(0, -30); frt2.sizeDelta = new Vector2(960, 640);
 
         _failHead = Display(Text_("FailHead", root, new Vector2(0.5f, 0.5f), new Vector2(0, 190),
                                   new Vector2(900, 110), 74, TextAnchor.MiddleCenter, ""));
@@ -1568,6 +1569,18 @@ public class UIManager : MonoBehaviour
             var cb = _onFailRetry; _onFailRetry = null;
             if (cb != null) cb();
         });
+
+        // Jump straight to another level from here. Dying is exactly when a player decides "this
+        // one isn't happening, let me go do something else" — routing that through the main menu
+        // adds two taps to a moment where the alternative is closing the app.
+        //
+        // The fail panel is deliberately left ACTIVE underneath: the picker is opaque and drawn
+        // last, so BACK simply reveals the fail screen again with RETRY still armed, and the
+        // FailRoutine coroutine waiting behind it is never disturbed.
+        TMP_Text failLevelsLbl;
+        var failLevelsBtn = Button_("FailLevels", root, new Vector2(0.5f, 0.5f), new Vector2(0, -262),
+                                    new Vector2(400, 104), Spaced("LEVELS"), 34, Accent, false, out failLevelsLbl);
+        failLevelsBtn.onClick.AddListener(() => OpenLevelSelect(SaveData.CurrentLevel));
 
         go.SetActive(false);
         return go;
@@ -1782,7 +1795,9 @@ public class UIManager : MonoBehaviour
         // and a stray tap on it mid-level would throw away the attempt. Only shown during a level
         // — on the main menu there is nowhere to go home to.
         TMP_Text homeLabel;
-        _settingsHomeBtn = Button_("SettingsHome", root, new Vector2(0.5f, 0.5f), new Vector2(0, -10),
+        // -173 keeps the 155 row pitch running: 292 / 137 / -18 / -173. It was at -10, which sat
+        // directly on top of the REMINDERS row added beside it.
+        _settingsHomeBtn = Button_("SettingsHome", root, new Vector2(0.5f, 0.5f), new Vector2(0, -173),
                                    new Vector2(700, 110), Spaced("QUIT TO MENU"), 34, Danger, false, out homeLabel);
         _settingsHomeBtn.onClick.AddListener(() =>
         {

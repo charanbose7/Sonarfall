@@ -235,6 +235,18 @@ public class GameManager : MonoBehaviour
     /// </summary>
     private void BeginRunAtLevel(int level)
     {
+        // Reachable from the fail screen's LEVELS button as well as the menu, and when it is,
+        // FailRoutine is still parked on its "wait for RETRY" loop. Tear that down first: left
+        // running it would sit there forever holding a stale callback, and a later failure would
+        // start a second copy of the same coroutine.
+        StopAllCoroutines();
+        Time.timeScale = 1f;
+        _ui.HideFailPanel();
+        SetGameplayVisuals(true);       // FailRoutine hides these; it is not around to restore them
+        _ui.SetCover(0f);
+        _levelBusy = false;
+        _ui.SetResetInteractable(true);
+
         _isDaily = false;
         _failStreak = 0;
         _stars = GameConfig.StartStars;              // a new run never inherits a carried gold star
@@ -1040,11 +1052,8 @@ public class GameManager : MonoBehaviour
         Vector2 playerPos = _player.transform.position;
         _sonar.RevealAll(playerPos, GameConfig.FailRevealTime);
 
-        int tiles = Mathf.Max(1, Mathf.RoundToInt(Vector2.Distance(playerPos, _exitWorld) / GameConfig.CellSize));
         string head = cause == FailCause.NoStars ? "OUT OF STARS" : "OUT OF TIME";
-        string detail = tiles <= 2
-            ? "So close — you were " + tiles + (tiles == 1 ? " tile" : " tiles") + " from the exit."
-            : "You were " + tiles + " tiles from the exit.";
+        string detail = ProgressPhrase(playerPos);
 
         // Let the reveal play out on its own first: the point of lighting the maze is to show the
         // route that was missed, and a panel drawn over it defeats that.
@@ -1088,6 +1097,45 @@ public class GameManager : MonoBehaviour
     }
 
     private bool _failRetryRequested;
+
+    /// <summary>
+    /// How far along the route the player actually got, 0..1, measured through the maze rather than
+    /// across it.
+    ///
+    /// The fail screen used to report a tile count from a straight-line distance, which was wrong
+    /// twice over. A player who has never SEEN the maze has no idea how big a tile is or how many
+    /// there are, so "13 tiles" carried no meaning; and crow-flies distance ignores every wall in
+    /// between, so it understated the real journey badly. A fraction of the route needs no spatial
+    /// reference at all — it answers the only question the player is actually asking, which is
+    /// "was I close?".
+    /// </summary>
+    private float RouteProgress(Vector2 playerPos)
+    {
+        if (_maze == null || _maze.cells == null) return 0f;
+
+        int size = _maze.size;
+        var here = new Vector2Int(
+            Mathf.Clamp(Mathf.RoundToInt(playerPos.x / GameConfig.CellSize), 0, size - 1),
+            Mathf.Clamp(Mathf.RoundToInt(playerPos.y / GameConfig.CellSize), 0, size - 1));
+
+        var whole = MazeGenerator.SolvePath(_maze.cells, size, new Vector2Int(0, 0), _exitCell);
+        var left  = MazeGenerator.SolvePath(_maze.cells, size, here, _exitCell);
+        if (whole == null || whole.Count <= 1 || left == null) return 0f;
+
+        // Counts include both endpoints, so the number of STEPS is Count - 1.
+        return Mathf.Clamp01(1f - (float)(left.Count - 1) / (whole.Count - 1));
+    }
+
+    /// <summary>Plain-language version of RouteProgress, for a player who cannot see the maze.</summary>
+    private string ProgressPhrase(Vector2 playerPos)
+    {
+        float p = RouteProgress(playerPos);
+        if (p >= 0.90f) return "The exit was right there.";
+        if (p >= 0.70f) return "You almost had it.";
+        if (p >= 0.45f) return "You were past halfway.";
+        if (p >= 0.20f) return "You had a fair way still to go.";
+        return "The exit was still a long way off.";
+    }
 
     /// <summary>
     /// Regenerate the current level from scratch. Exposed as a button because a maze whose layout
