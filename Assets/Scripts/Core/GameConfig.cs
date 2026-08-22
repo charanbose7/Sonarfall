@@ -236,6 +236,12 @@ public static class GameConfig
     // ---- Tutorial ----
     public const float TutorialDragDistance = 1.6f; // world units the player must drag to pass step 1
 
+    /// <summary>
+    /// Seconds after the tutorial ends before a player who still hasn't pinged is told to. Long
+    /// enough that anyone who was about to ping anyway does it first and never sees the card.
+    /// </summary>
+    public const float PingNudgeDelay = 5f;
+
     // ---- Performance ----
     public const int   TargetFrameRate    = 60;
 

@@ -21,6 +21,9 @@ public class GameManager : MonoBehaviour
     /// <summary>A UI button was just pressed, so this tap must not also count as a gameplay tap.</summary>
     public bool UiJustPressed => _ui != null && _ui.UiJustPressed;
 
+    /// <summary>Is this screen point over the HUD readout band? See UIManager.IsOverHud.</summary>
+    public bool IsOverHud(Vector2 screenPos) => _ui != null && _ui.IsOverHud(screenPos);
+
     private Camera _cam;
     private PlayerController _player;
     private SonarManager _sonar;
@@ -147,6 +150,38 @@ public class GameManager : MonoBehaviour
         _exitRingSR.sortingOrder = 29;
     }
 
+    /// <summary>
+    /// Hide or restore every gameplay object that draws itself independently of the sonar reveal:
+    /// the player dot (plus its halo and trail), the exit, the decoys and the bonus orb.
+    ///
+    /// The walls fade out with the reveal, but these all glow on their own — so on the fail screen
+    /// they carried on shining through the dim as bright unexplained blobs, right next to the text
+    /// telling the player the level was over. Renderers are disabled rather than the GameObjects,
+    /// so positions, coroutines and pulse animations survive untouched for the retry.
+    /// </summary>
+    private void SetGameplayVisuals(bool on)
+    {
+        if (_playerRenderers == null && _player != null)
+            _playerRenderers = _player.GetComponentsInChildren<Renderer>(true);
+
+        if (_playerRenderers != null)
+            for (int i = 0; i < _playerRenderers.Length; i++)
+                if (_playerRenderers[i] != null) _playerRenderers[i].enabled = on;
+
+        if (_exitSR != null) _exitSR.enabled = on;
+        if (_exitRingSR != null) _exitRingSR.enabled = on;
+        if (_orbSR != null) _orbSR.enabled = on;
+
+        if (_decoySR != null)
+            for (int i = 0; i < _decoySR.Length; i++)
+            {
+                if (_decoySR[i] != null) _decoySR[i].enabled = on;
+                if (_decoyRingSR[i] != null) _decoyRingSR[i].enabled = on;
+            }
+    }
+
+    private Renderer[] _playerRenderers;
+
     /// <summary>Show the main menu. Nothing runs until the player presses PLAY or DAILY.</summary>
     public void StartGame()
     {
@@ -157,6 +192,7 @@ public class GameManager : MonoBehaviour
         _ui.OnDailyResultClosed = ReturnToMenu;
         _ui.OnResetLevel = ResetLevel;
         _ui.OnHome = GoHome;
+        _ui.OnLevelChosen = BeginRunAtLevel;
         _ui.Audio = _audio;     // lets the UI layer make noise without reaching for a singleton
 
         ReturnToMenu();
@@ -166,6 +202,10 @@ public class GameManager : MonoBehaviour
     {
         if (_tutorial != null) _tutorial.Hide();   // never let the tutorial overlay sit on the menu
         _ui.HideTeachCard();                       // nor an explainer from the run we just left
+        _ui.HideFailPanel();                       // nor a fail screen we never pressed RETRY on
+        SetGameplayVisuals(true);                  // and never leave the glows hidden on the menu
+        _levelBusy = false;
+        _ui.SetResetInteractable(true);
         _isDaily = false;
         _failStreak = 0;
         _level = SaveData.CurrentLevel;     // the menu previews where they'll pick up
@@ -176,20 +216,58 @@ public class GameManager : MonoBehaviour
         _ui.ShowStart(_level, _dayStreak, SaveData.DailyDone, SaveData.RunFinished);
     }
 
-    /// <summary>Normal endless progression.</summary>
-    private void BeginEndlessRun()
+    /// <summary>Normal endless progression — resume wherever the player left off.</summary>
+    private void BeginEndlessRun() => BeginRunAtLevel(SaveData.CurrentLevel);
+
+    /// <summary>
+    /// Start the endless run at a given level. CONTINUE and the level wheel both come through here.
+    ///
+    /// These used to be two near-identical methods, which is exactly how they drifted apart: the
+    /// wheel's copy skipped the tutorial outright on the theory that anyone picking a level had
+    /// played before — but a brand-new player's only unlocked level IS 1, so LEVELS was the first
+    /// thing they could press and they got no tutorial at all. Meanwhile CONTINUE's copy tested
+    /// ShouldRun with no level check, so the tutorial it never got would later ambush them on
+    /// level 7. One method, one rule.
+    ///
+    /// Note this deliberately does NOT write the chosen level back to SaveData — dropping into
+    /// level 3 for a rematch must not throw away a resume point of 47. WinRoutine only ever raises
+    /// CurrentLevel, so progress can climb from here but never fall.
+    /// </summary>
+    private void BeginRunAtLevel(int level)
     {
+        // Reachable from the fail screen's LEVELS button as well as the menu, and when it is,
+        // FailRoutine is still parked on its "wait for RETRY" loop. Tear that down first: left
+        // running it would sit there forever holding a stale callback, and a later failure would
+        // start a second copy of the same coroutine.
+        StopAllCoroutines();
+        Time.timeScale = 1f;
+        _ui.HideFailPanel();
+        SetGameplayVisuals(true);       // FailRoutine hides these; it is not around to restore them
+        _ui.SetCover(0f);
+        _levelBusy = false;
+        _ui.SetResetInteractable(true);
+
         _isDaily = false;
         _failStreak = 0;
         _stars = GameConfig.StartStars;              // a new run never inherits a carried gold star
-        _level = SaveData.CurrentLevel;              // resume, don't restart
+        _level = Mathf.Max(1, level);
         _dayStreak = SaveData.RegisterDailyVisit();  // opening the game counts toward the streak
         _dailyBonusPending = true;                   // spent by the first level this session builds
 
+        // The tutorial belongs to level 1 and nowhere else. It teaches "drag, ping, here is the
+        // exit" — none of which is news to someone starting level 12, and all of which is baffling
+        // as a mid-ladder interruption.
+        bool tutorialPending = _tutorial != null && _tutorial.ShouldRun;
+        bool runTutorial = tutorialPending && _level == 1;
+
+        // Starting above level 1 with the tutorial still unseen means the player has demonstrably
+        // moved past needing it. Retire it now rather than leaving it armed to fire later.
+        if (tutorialPending && !runTutorial) SaveData.MarkHintSeen();
+
         BuildLevel(_level);
         _ui.HideStart();
-        State = _tutorial != null && _tutorial.ShouldRun ? GameState.Tutorial : GameState.Playing;
-        if (State == GameState.Tutorial)
+        State = runTutorial ? GameState.Tutorial : GameState.Playing;
+        if (runTutorial)
         {
             // Hide RETRY/settings for the duration. ResetLevel refuses to run in the Tutorial
             // state, so leaving the button on screen just gives a first-time player something
@@ -197,7 +275,19 @@ public class GameManager : MonoBehaviour
             _ui.ShowInGameGear(false);
             _tutorial.Begin(this, _ui, _player);
         }
-        else MaybeTeachLevel();
+        else
+        {
+            _ui.ShowInGameGear(true);
+            // Beginner on level 1 who is NOT getting the tutorial — almost always someone who
+            // quit part way through it. They may never have been shown the ping, so arm the same
+            // nudge the tutorial hands over to. Anyone who has finished a level once is past this.
+            if (_level == 1 && !SaveData.RunFinished)
+            {
+                _pingNudgeArmed = true;
+                _pingNudgeT = 0f;
+            }
+            MaybeTeachLevel();
+        }
     }
 
     /// <summary>
@@ -221,11 +311,15 @@ public class GameManager : MonoBehaviour
 
     private void BuildLevel(int level)
     {
+        _pingNudgeArmed = false;   // never let the first-level nudge leak into a later level
         _profile = GameConfig.GetDifficulty(level, _failStreak);
 
         // The daily run uses the date seed so every player worldwide gets the same layout today.
         int seed = _isDaily ? SaveData.DailySeed : Random.Range(1, int.MaxValue);
-        _maze = MazeGenerator.Generate(_profile.mazeSize, GameConfig.CellSize, seed);
+        // On the tutorial layout the spawn must open sideways — see MazeGenerator.horizontalStart.
+        // Gated on level 1 as well as ShouldRun, matching where the tutorial can actually run.
+        bool tutorialLayout = !_isDaily && level == 1 && _tutorial != null && _tutorial.ShouldRun;
+        _maze = MazeGenerator.Generate(_profile.mazeSize, GameConfig.CellSize, seed, tutorialLayout);
 
         // Per-sector palette: re-tint walls and the ping ring so each chapter reads differently.
         Color sectorColor = GameConfig.SectorWallColor(level);
@@ -476,8 +570,17 @@ public class GameManager : MonoBehaviour
         if (State != GameState.Tutorial) return;
         State = GameState.Playing;
         _ui.ShowInGameGear(true);   // hidden while the tutorial ran; the buttons work from here
+        // Arm the ping nudge. Level 1 is small enough to solve by feeling along the walls, and
+        // testers who did that finished their first maze having never fired a ping voluntarily —
+        // they learned the button existed and not that it was the whole game.
+        _pingNudgeArmed = true;
+        _pingNudgeT = 0f;
         MaybeTeachLevel();          // level 1 may still have an orb to introduce
     }
+
+    // ---- first-level ping nudge ----
+    private bool  _pingNudgeArmed;
+    private float _pingNudgeT;
 
     /// <summary>The exit's current world position — the tutorial points its marker here.</summary>
     public Vector3 ExitWorldPos { get { return new Vector3(_exitWorld.x, _exitWorld.y, 0f); } }
@@ -580,6 +683,7 @@ public class GameManager : MonoBehaviour
         _ui.DarkFlash();                 // brief darken so the ring burst reads as powerful
         _sonar.EmitPing(_player.transform.position);
         _pingReadyTime = Time.time + GameConfig.PingCooldown;
+        _pingNudgeArmed = false;         // they found it on their own; say nothing
     }
 
     private void Update()
@@ -613,6 +717,26 @@ public class GameManager : MonoBehaviour
     private void TickPlaying()
     {
         if (_player.IsRewinding) return; // world is frozen mid-rewind
+
+        // Nudge a brand-new player who came out of the tutorial and started groping along the walls
+        // instead of pinging. Fires once, only on the level the tutorial ran on, and only if they
+        // genuinely have not pinged. The card pauses the clock like every other explainer, so this
+        // costs them nothing.
+        if (_pingNudgeArmed && !_ui.TeachOpen)
+        {
+            _pingNudgeT += Time.deltaTime;
+            if (_pingNudgeT >= GameConfig.PingNudgeDelay)
+            {
+                _pingNudgeArmed = false;
+                _ui.ShowTeachCardAtUI(
+                    "TAP TO PING",
+                    "You don't have to feel your way around.\n\n" +
+                    "<b>Tap anywhere</b> to fire a sonar ping and light up the walls near you.",
+                    UIManager.Accent, Color.clear,
+                    null,
+                    _ui.RevealsRect, "REVEALS", 165f, _ui.RevealsIconRect);
+            }
+        }
 
         if (_profile.timeLimit > 0f)
         {
@@ -803,6 +927,19 @@ public class GameManager : MonoBehaviour
         bool clutch = _profile.timeLimit > 0f && _levelTimer <= GameConfig.ClutchSeconds;
         bool sectorDone = GameConfig.IsSectorFinale(_level);
 
+        // Clearing a level unlocks the Daily Maze. This used to live only in FailRoutine, back when
+        // the flag meant "played an endless run to its end" — which, in a score run, meant dying.
+        // On a level ladder there is no run to end, so the only way to unlock the Daily was to LOSE
+        // a level: clear level 1 and it stayed locked, fail it and it opened. Winning is the more
+        // obvious qualification of the two.
+        bool firstEverClear = !_isDaily && !SaveData.RunFinished;
+        if (!_isDaily) SaveData.MarkRunFinished();
+
+        // Ask for notification permission here and nowhere else. Prompting on first launch is the
+        // reliable way to earn a permanent denial from someone with no reason to say yes yet; the
+        // moment after a first win is when the app has actually made its case.
+        if (firstEverClear) GameNotifications.RequestPermission();
+
         // ---- Immediate impact ----
         // Your own ping, coming back. The cue that used to be here was a C5-E5-G5-C6 arpeggio and
         // the praise sting 0.4s later also climbs from C5 — two ascending arpeggios that close
@@ -878,7 +1015,10 @@ public class GameManager : MonoBehaviour
 
         _failStreak = 0;
         _level++;
-        SaveData.CurrentLevel = _level;                     // resume point if they quit here
+        // Only ever move the resume point FORWARD. Level select lets the player drop back to an
+        // earlier maze whenever they like; writing that lower number back would quietly erase the
+        // real progress, so replaying level 3 at level 47 must not reset CONTINUE to 4.
+        if (_level > SaveData.CurrentLevel) SaveData.CurrentLevel = _level;
         BuildLevel(_level);                                 // camera + player swap, hidden by the cover
         _ui.HideCelebration();
         State = GameState.Playing;
@@ -912,28 +1052,41 @@ public class GameManager : MonoBehaviour
         Vector2 playerPos = _player.transform.position;
         _sonar.RevealAll(playerPos, GameConfig.FailRevealTime);
 
-        int tiles = Mathf.Max(1, Mathf.RoundToInt(Vector2.Distance(playerPos, _exitWorld) / GameConfig.CellSize));
         string head = cause == FailCause.NoStars ? "OUT OF STARS" : "OUT OF TIME";
-        string line = tiles <= 2
-            ? "SO CLOSE!\n" + tiles + (tiles == 1 ? " tile away" : " tiles away")
-            : head + "\n" + tiles + " tiles away";
-        if (!_isDaily) line += "\nRETRY LEVEL " + _level;
-        _ui.ShowBanner(line, UIManager.Danger, GameConfig.FailRevealTime * 0.6f);
+        string detail = ProgressPhrase(playerPos);
 
+        // Let the reveal play out on its own first: the point of lighting the maze is to show the
+        // route that was missed, and a panel drawn over it defeats that.
         yield return new WaitForSecondsRealtime(GameConfig.FailRevealTime);
 
-        // The daily allows one attempt — failing ends it.
+        // Failing the daily no longer burns the day. It used to call CompleteDaily(0), which locked
+        // the button to "DAILY DONE" — so a player who died eight seconds in had nothing left to
+        // come back for, and the one feature built specifically to pull them in tomorrow punished
+        // them for showing up today. The single-attempt tension lives in the CLEAR being recorded
+        // once, not in a loss consuming the whole day.
         if (_isDaily)
         {
-            SaveData.CompleteDaily(0);
             _ui.ShowDailyResult(false, 0, _dayStreak, false);
             State = GameState.Start;
             yield break;
         }
 
+        // Now dim it all and wait. Nothing rebuilds until the player presses RETRY.
+        // The glows go with the maze: once the reveal has had its moment there is nothing left to
+        // read here, and a floating exit marker behind the words is just clutter.
+        SetGameplayVisuals(false);
+        _failRetryRequested = false;
+        _ui.ShowFailPanel(head, detail + "\n\nRetry level " + _level + ".",
+                          () => _failRetryRequested = true);
+
+        while (!_failRetryRequested) yield return null;
+
+        _ui.HideFailPanel();
+
         // Same level, brand new layout — the challenge repeats, the solution doesn't.
         _ui.SetCover(1f);
         yield return new WaitForSecondsRealtime(0.22f);
+        SetGameplayVisuals(true);       // restore behind the cover, before anything is on screen
         BuildLevel(_level);
         State = GameState.Playing;
         _ui.SetCover(0f);
@@ -941,6 +1094,47 @@ public class GameManager : MonoBehaviour
         // turns up on 18% of levels, so it can easily first appear on a retry rather than on the
         // clear that would otherwise have introduced it.
         MaybeTeachLevel();
+    }
+
+    private bool _failRetryRequested;
+
+    /// <summary>
+    /// How far along the route the player actually got, 0..1, measured through the maze rather than
+    /// across it.
+    ///
+    /// The fail screen used to report a tile count from a straight-line distance, which was wrong
+    /// twice over. A player who has never SEEN the maze has no idea how big a tile is or how many
+    /// there are, so "13 tiles" carried no meaning; and crow-flies distance ignores every wall in
+    /// between, so it understated the real journey badly. A fraction of the route needs no spatial
+    /// reference at all — it answers the only question the player is actually asking, which is
+    /// "was I close?".
+    /// </summary>
+    private float RouteProgress(Vector2 playerPos)
+    {
+        if (_maze == null || _maze.cells == null) return 0f;
+
+        int size = _maze.size;
+        var here = new Vector2Int(
+            Mathf.Clamp(Mathf.RoundToInt(playerPos.x / GameConfig.CellSize), 0, size - 1),
+            Mathf.Clamp(Mathf.RoundToInt(playerPos.y / GameConfig.CellSize), 0, size - 1));
+
+        var whole = MazeGenerator.SolvePath(_maze.cells, size, new Vector2Int(0, 0), _exitCell);
+        var left  = MazeGenerator.SolvePath(_maze.cells, size, here, _exitCell);
+        if (whole == null || whole.Count <= 1 || left == null) return 0f;
+
+        // Counts include both endpoints, so the number of STEPS is Count - 1.
+        return Mathf.Clamp01(1f - (float)(left.Count - 1) / (whole.Count - 1));
+    }
+
+    /// <summary>Plain-language version of RouteProgress, for a player who cannot see the maze.</summary>
+    private string ProgressPhrase(Vector2 playerPos)
+    {
+        float p = RouteProgress(playerPos);
+        if (p >= 0.90f) return "The exit was right there.";
+        if (p >= 0.70f) return "You almost had it.";
+        if (p >= 0.45f) return "You were past halfway.";
+        if (p >= 0.20f) return "You had a fair way still to go.";
+        return "The exit was still a long way off.";
     }
 
     /// <summary>
@@ -951,10 +1145,18 @@ public class GameManager : MonoBehaviour
     public void ResetLevel()
     {
         if (State != GameState.Playing && State != GameState.Celebrating) return;
+        // Reject re-entry while a rebuild is already running. This used to StopAllCoroutines() and
+        // start over unconditionally, so a second tap could kill the previous routine in the window
+        // between SetCover(1f) and SetCover(0f) — the cover never came back down and the game was
+        // left on a permanently black screen with no way out.
+        if (_levelBusy) return;
         StopAllCoroutines();
         Time.timeScale = 1f;
         StartCoroutine(ResetLevelRoutine());
     }
+
+    /// <summary>True while a level rebuild is in flight and the screen is covered.</summary>
+    private bool _levelBusy;
 
     /// <summary>
     /// Regenerate the level behind a full blackout.
@@ -966,6 +1168,8 @@ public class GameManager : MonoBehaviour
     /// </summary>
     private IEnumerator ResetLevelRoutine()
     {
+        _levelBusy = true;
+        _ui.SetResetInteractable(false);    // grey the button out for the duration of the wipe
         State = GameState.Celebrating;      // freeze the clock and input during the wipe
         _ui.HideCelebration();
         _ui.HideTeachCard();
@@ -983,6 +1187,8 @@ public class GameManager : MonoBehaviour
 
         State = GameState.Playing;
         _ui.SetCover(0f);
+        _levelBusy = false;
+        _ui.SetResetInteractable(true);
         MaybeTeachLevel();      // the fresh layout may introduce something new — see FailRoutine
     }
 
@@ -1060,10 +1266,42 @@ public class GameManager : MonoBehaviour
         State = GameState.Playing;
         MaybeTeachLevel();   // mirror the real level-entry path, so QA sees what a player sees
     }
+
+    /// <summary>
+    /// Editor-only QA hook: run the real timeout path immediately. Verifying the fail screen by
+    /// actually waiting out a 34-second clock is not workable, and faking it by calling the UI
+    /// directly would skip the reveal, the visual teardown and the RETRY gating — which is exactly
+    /// the part worth testing. Compiled out of player builds.
+    /// </summary>
+    public void DebugFailNow()
+    {
+        if (State != GameState.Playing) return;
+        StartCoroutine(FailRoutine(FailCause.Timeout));
+    }
+
+    /// <summary>Editor-only QA hook: clear the current level immediately, via the real win path.</summary>
+    public void DebugWinNow()
+    {
+        if (State != GameState.Playing && State != GameState.Tutorial) return;
+        StopAllCoroutines();
+        StartCoroutine(WinRoutine());
+    }
 #endif
 
     private void OnApplicationPause(bool paused)
     {
         AudioListener.pause = paused; // mute cleanly when backgrounded; timer naturally halts
+
+        // Reminders are rebuilt every time the app leaves the foreground and wiped every time it
+        // returns, so they always reflect the current save and can never fire at someone who is
+        // already playing.
+        if (paused) GameNotifications.OnAppBackground();
+        else        GameNotifications.OnAppForeground();
+    }
+
+    /// <summary>Android "back to home" and desktop quit both land here, not in OnApplicationPause.</summary>
+    private void OnApplicationQuit()
+    {
+        GameNotifications.OnAppBackground();
     }
 }

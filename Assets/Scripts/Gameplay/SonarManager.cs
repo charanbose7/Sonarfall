@@ -16,6 +16,7 @@ public class SonarManager : MonoBehaviour
         public float startTime;
         public bool active;
         public bool[] ticked;      // per-wall, this ping's front has passed it
+        public int tickedWalls;    // how many of `ticked` are set — lets a finished ping skip its scan
         public int tickCount;
         public float lastTickTime;
     }
@@ -139,6 +140,7 @@ public class SonarManager : MonoBehaviour
             _pings[i].active = false;
             _pings[i].tickCount = 0;
             if (_pings[i].ticked.Length > 0) Array.Clear(_pings[i].ticked, 0, _pings[i].ticked.Length);
+            _pings[i].tickedWalls = 0;
         }
         _nextSlot = 0;
         for (int i = 0; i < PoolSize; i++)
@@ -157,6 +159,7 @@ public class SonarManager : MonoBehaviour
         p.active = true;
         p.tickCount = 0;
         if (p.ticked.Length > 0) Array.Clear(p.ticked, 0, p.ticked.Length);
+        p.tickedWalls = 0;
         _nextSlot = (_nextSlot + 1) % _pings.Length;
 
         Spawn(_rings, origin, _ringColor);
@@ -185,6 +188,7 @@ public class SonarManager : MonoBehaviour
         p.active = true;
         p.tickCount = int.MaxValue; // suppress the cascading tick audio for this sweep
         if (p.ticked.Length > 0) Array.Clear(p.ticked, 0, p.ticked.Length);
+        p.tickedWalls = 0;
         _nextSlot = (_nextSlot + 1) % _pings.Length;
     }
 
@@ -202,19 +206,30 @@ public class SonarManager : MonoBehaviour
         DetectTicks();
     }
 
+    // Shader property IDs, resolved once. The string overloads of SetGlobal* hash the name on every
+    // call, and these six run every frame for the life of the app — the integer overloads skip that
+    // entirely. Standard Unity practice and free.
+    private static readonly int IdSonarPings = Shader.PropertyToID("_SonarPings");
+    private static readonly int IdSonarTime  = Shader.PropertyToID("_SonarTime");
+    private static readonly int IdSonarSpeed = Shader.PropertyToID("_SonarSpeed");
+    private static readonly int IdSonarFade  = Shader.PropertyToID("_SonarFade");
+    private static readonly int IdSonarBand  = Shader.PropertyToID("_SonarBand");
+    private static readonly int IdSonarFlash = Shader.PropertyToID("_SonarFlash");
+
     private void PushGlobals()
     {
+        float now = Time.time;                       // one call, not one per ping
         for (int i = 0; i < _pings.Length; i++)
         {
             var p = _pings[i];
             _gpu[i] = p.active ? new Vector4(p.origin.x, p.origin.y, p.startTime, 1f) : Vector4.zero;
         }
-        Shader.SetGlobalVectorArray("_SonarPings", _gpu);
-        Shader.SetGlobalFloat("_SonarTime", Time.time);
-        Shader.SetGlobalFloat("_SonarSpeed", _speed);
-        Shader.SetGlobalFloat("_SonarFade", _fade);
-        Shader.SetGlobalFloat("_SonarBand", _band);
-        Shader.SetGlobalFloat("_SonarFlash", GameConfig.FlashBoost);
+        Shader.SetGlobalVectorArray(IdSonarPings, _gpu);
+        Shader.SetGlobalFloat(IdSonarTime,  now);
+        Shader.SetGlobalFloat(IdSonarSpeed, _speed);
+        Shader.SetGlobalFloat(IdSonarFade,  _fade);
+        Shader.SetGlobalFloat(IdSonarBand,  _band);
+        Shader.SetGlobalFloat(IdSonarFlash, GameConfig.FlashBoost);
     }
 
     private void UpdateRings()
@@ -259,20 +274,25 @@ public class SonarManager : MonoBehaviour
         for (int i = 0; i < _pings.Length; i++)
         {
             var p = _pings[i];
-            if (!p.active || p.tickCount >= TickCap) continue;
+            // Pings are never deactivated mid-level (only ResetPings clears them), so without the
+            // tickedWalls check a ping whose front left the maze long ago still walked all ~400
+            // wall entries every frame just to find them all already flagged.
+            if (!p.active || p.tickCount >= TickCap || p.tickedWalls >= _wallCount) continue;
 
             float radius = (Time.time - p.startTime) * _speed;
             if (radius > _maxDetectRadius) continue;
 
+            float radiusSqr = radius * radius;       // hoisted out of the inner loop
             bool anyNew = false, anyNearNew = false;
             for (int w = 0; w < _wallCount; w++)
             {
                 if (p.ticked[w]) continue;
                 Vector2 wc = _wallCenters[w];
                 float dx = wc.x - p.origin.x, dy = wc.y - p.origin.y;
-                if (dx * dx + dy * dy > radius * radius) continue; // front hasn't reached it
+                if (dx * dx + dy * dy > radiusSqr) continue; // front hasn't reached it
 
                 p.ticked[w] = true;
+                p.tickedWalls++;
                 anyNew = true;
                 float pdx = wc.x - pp.x, pdy = wc.y - pp.y;
                 if (pdx * pdx + pdy * pdy < nearSqr) anyNearNew = true;

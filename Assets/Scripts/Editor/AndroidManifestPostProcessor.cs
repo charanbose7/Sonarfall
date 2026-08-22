@@ -17,7 +17,14 @@ using UnityEngine;
 /// </summary>
 public class AndroidManifestPostProcessor : IPostGenerateGradleAndroidProject
 {
-    private const string Permission = "android.permission.VIBRATE";
+    // VIBRATE is a NORMAL permission: granted at install, never prompted, and it does not appear
+    // under Settings -> App permissions (that screen only lists runtime groups). POST_NOTIFICATIONS
+    // is a RUNTIME permission on API 33+, so that one does prompt and does show up there.
+    private static readonly string[] Permissions =
+    {
+        "android.permission.VIBRATE",
+        "android.permission.POST_NOTIFICATIONS",
+    };
 
     // After Unity's own manifest generation, so the file exists and nothing overwrites us.
     public int callbackOrder => 1;
@@ -40,22 +47,29 @@ public class AndroidManifestPostProcessor : IPostGenerateGradleAndroidProject
 
         const string ns = "http://schemas.android.com/apk/res/android";
 
-        foreach (XmlNode node in manifest.SelectNodes("uses-permission"))
+        bool changed = false;
+        foreach (string permission in Permissions)
         {
-            var el = node as XmlElement;
-            if (el != null && el.GetAttribute("name", ns) == Permission)
+            bool present = false;
+            foreach (XmlNode node in manifest.SelectNodes("uses-permission"))
             {
-                Debug.Log("[Sonarfall] VIBRATE permission already present.");
-                return;
+                var el = node as XmlElement;
+                if (el != null && el.GetAttribute("name", ns) == permission) { present = true; break; }
             }
+            if (present)
+            {
+                Debug.Log("[Sonarfall] " + permission + " already present.");
+                continue;
+            }
+
+            var added = doc.CreateElement("uses-permission");
+            added.SetAttribute("name", ns, permission);
+            manifest.AppendChild(added);
+            changed = true;
+            Debug.Log("[Sonarfall] Added " + permission);
         }
 
-        var added = doc.CreateElement("uses-permission");
-        added.SetAttribute("name", ns, Permission);
-        manifest.AppendChild(added);
-        doc.Save(manifestPath);
-
-        Debug.Log("[Sonarfall] Added " + Permission + " to " + manifestPath);
+        if (changed) doc.Save(manifestPath);
     }
 }
 #endif

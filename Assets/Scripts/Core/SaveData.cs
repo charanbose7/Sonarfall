@@ -14,6 +14,7 @@ public static class SaveData
     private const string KBestDay    = "em_best_day_streak";
     private const string KSound      = "em_sound";
     private const string KHaptics    = "em_haptics";
+    private const string KNotifs     = "em_notifs";       // local reminders opt-out
     private const string KDailyDone  = "em_daily_done";   // UTC day number of the last daily clear
     private const string KDailyBest  = "em_daily_best";   // best daily score
     private const string KRunFinished= "em_run_finished";  // player has completed one endless run
@@ -91,9 +92,14 @@ public static class SaveData
     }
 
     /// <summary>
-    /// True once the player has played an endless run through to its end (i.e. lost once).
+    /// True once the player has seen a normal level through to an ending — cleared it OR run out.
     /// The Daily Maze stays locked until then: it is a single high-pressure attempt with no
     /// retries, which is a terrible first experience for someone who has never pinged a wall.
+    ///
+    /// The name is a leftover from the score-run era, when "the run finished" meant the player had
+    /// died and there was exactly one way to get here. On a level ladder both outcomes qualify, and
+    /// for a while only the losing one was wired up — so clearing level 1 left the Daily locked
+    /// while failing it opened the door.
     /// </summary>
     public static bool RunFinished => PlayerPrefs.GetInt(KRunFinished, 0) == 1;
 
@@ -162,6 +168,16 @@ public static class SaveData
     {
         get => PlayerPrefs.GetInt(KHaptics, 1) == 1;
         set { PlayerPrefs.SetInt(KHaptics, value ? 1 : 0); PlayerPrefs.Save(); }
+    }
+
+    /// <summary>
+    /// Local reminders. Defaults ON, but nothing is ever scheduled until the OS permission is
+    /// granted, and the player can turn it off in Settings without touching system settings.
+    /// </summary>
+    public static bool NotificationsOn
+    {
+        get => PlayerPrefs.GetInt(KNotifs, 1) == 1;
+        set { PlayerPrefs.SetInt(KNotifs, value ? 1 : 0); PlayerPrefs.Save(); }
     }
 
     /// <summary>Push saved settings into the systems that consume them.</summary>
