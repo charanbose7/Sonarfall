@@ -1322,6 +1322,22 @@ public class UIManager : MonoBehaviour
                                   new Vector2(820, LevelRowH), 64, TextAnchor.MiddleCenter,
                                   lvl.ToString()));
             t.raycastTarget = false;
+            // Midline, not Center. TMP's Center centres the LINE BOX (ascender-to-descender),
+            // which for digits sits noticeably above the glyphs you can actually see, so the
+            // selected number rode high out of the highlight band. Midline centres on the visual
+            // middle of the glyphs themselves, which is what the eye lines up against — and unlike
+            // measuring the offset at runtime it stays correct at any font size and at the 1.18x
+            // scale the selected row is drawn at.
+            t.alignment = TextAlignmentOptions.Midline;
+            // Pivot on the row's CENTRE. Text_ sets pivot = anchor, and the anchor here is the
+            // content's top edge, which caused two separate misalignments: the glyph sat half a
+            // row below the rect origin, and - the one a constant offset can never fix - the
+            // per-row localScale (1.18x selected, 0.94x neighbours) scaled about the TOP edge, so
+            // each row's number drifted by a different amount and the spacing came out uneven.
+            // Pivoting on the centre puts the glyph on the pivot, so scaling no longer moves it.
+            var lrt = t.rectTransform;
+            lrt.pivot = new Vector2(0.5f, 0.5f);
+            lrt.anchoredPosition = new Vector2(0, -(LevelRowH * (i + 2) + LevelRowH * 0.5f));
             _levelRows.Add(t);
         }
 
@@ -1440,44 +1456,9 @@ public class UIManager : MonoBehaviour
     }
 
     /// <summary>Wheel physics: track the drag, then ease into the nearest row when it settles.</summary>
-    private bool _levelGlyphFixed;
-
-    /// <summary>
-    /// TMP centres the LINE BOX, not the visible glyph, so the digits draw measurably below their
-    /// rect centre (66px at this size) and the selected number straddled the band instead of
-    /// sitting in it. Measure the real offset off a laid-out row and shift every row by it.
-    ///
-    /// This has to run once the panel is actually visible: attempted at build time, the rows have
-    /// not been through a layout pass yet, ForceMeshUpdate reports bounds around the origin, and
-    /// the correction silently computes as zero. Measuring beats hard-coding 66 because the number
-    /// is a function of the font and the row size, either of which may change later.
-    /// </summary>
-    private void FixLevelRowGlyphOffset()
-    {
-        if (_levelGlyphFixed || _levelRows.Count == 0) return;
-        var probe = _levelRows[0];
-        probe.ForceMeshUpdate();
-        float glyphDy = probe.textBounds.center.y;     // negative = glyph sits low in its rect
-        if (Mathf.Abs(glyphDy) < 0.5f) return;         // not laid out yet — try again next frame
-
-        // Written as an ABSOLUTE placement recomputed from the row index, not as a relative nudge.
-        // A relative shift is only correct if it runs exactly once, and the guard flag is a private
-        // non-serialized bool that an Editor domain reload silently resets — which double-applied
-        // the correction and put every row a full 132px out. Recomputing from the index makes
-        // running this twice a no-op.
-        for (int i = 0; i < _levelRows.Count; i++)
-        {
-            var rt = _levelRows[i].rectTransform;
-            float nominal = -(LevelRowH * (i + 2) + LevelRowH * 0.5f);
-            rt.anchoredPosition = new Vector2(rt.anchoredPosition.x, nominal - glyphDy);
-        }
-        _levelGlyphFixed = true;
-    }
-
     private void TickLevelSelect()
     {
         if (_levelPanel == null || !_levelPanel.activeSelf) return;
-        FixLevelRowGlyphOffset();
 
         if (_levelSnapping)
         {
