@@ -1076,7 +1076,10 @@ public class GameManager : MonoBehaviour
         // read here, and a floating exit marker behind the words is just clutter.
         SetGameplayVisuals(false);
         _failRetryRequested = false;
-        _ui.ShowFailPanel(head, detail + "\n\nRetry level " + _level + ".",
+        // Just the outcome. The level number is already in the HUD directly above and the
+        // button itself says RETRY, so "Retry level 27." was restating two things already
+        // on screen.
+        _ui.ShowFailPanel(head, detail,
                           () => _failRetryRequested = true);
 
         while (!_failRetryRequested) yield return null;
