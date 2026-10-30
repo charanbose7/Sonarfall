@@ -60,7 +60,10 @@ public static class VisualUtils
         tex.filterMode = FilterMode.Bilinear;
         tex.wrapMode = TextureWrapMode.Clamp;
         tex.Apply(false, true);
-        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+        // FullRect, not the default tight mesh. Unity's outline tracer mangles shapes made of
+        // separate islands (the six dashes of the exit reticle rendered as nothing at all), and a
+        // quad per sprite costs nothing at these sizes.
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size, 0, SpriteMeshType.FullRect);
     }
 
     /// <summary>

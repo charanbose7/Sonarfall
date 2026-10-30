@@ -1166,8 +1166,11 @@ public partial class GameManager : MonoBehaviour
             float k = _rippleAge[i] / rippleLife;
             if (k >= 1f) { _rippleAge[i] = -1f; _exitRipples[i].color = new Color(0f, 0f, 0f, 0f); continue; }
             _exitRipples[i].transform.position = _exitSR.transform.position;
-            _exitRipples[i].transform.localScale = Vector3.one * (GameConfig.CellSize * Mathf.Lerp(0.7f, 2.8f, Easing.OutCubic(k)));
-            var pc = GameConfig.ExitColor; pc.a = (1f - k) * (1f - k) * (0.45f + 0.35f * near);
+            // Born on the reticle (Ring's line sits at a quarter of its scale) and carried well past
+            // it. An ease-out curve parked them on the reticle's radius for most of their life,
+            // where they filled in its dashes and hid them.
+            _exitRipples[i].transform.localScale = Vector3.one * (GameConfig.CellSize * Mathf.Lerp(2.2f, 6.5f, Easing.OutQuad(k)));
+            var pc = GameConfig.ExitColor; pc.a = (1f - k) * (1f - k) * (0.40f + 0.30f * near);
             _exitRipples[i].color = pc;
         }
     }
