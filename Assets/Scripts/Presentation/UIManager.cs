@@ -42,6 +42,8 @@ public partial class UIManager : MonoBehaviour
         return t;
     }
     private Canvas _canvas;
+    private CanvasScaler _scaler;
+    private int _aspectW, _aspectH;
     private RectTransform _safe;
     private CanvasGroup _hudGroup;
 
@@ -203,7 +205,8 @@ public partial class UIManager : MonoBehaviour
         var scaler = canvasGO.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1080f, 1920f); // portrait reference
-        scaler.matchWidthOrHeight = 0.5f;
+        _scaler = scaler;
+        ApplyAspect();       // 0.5 on phones; height-matched on anything wider (see ApplyAspect)
         canvasGO.AddComponent<GraphicRaycaster>();
 
         // Safe-area container for the readouts.
@@ -396,7 +399,46 @@ public partial class UIManager : MonoBehaviour
         // Top-most: opaque cover for masking the between-level swap (created last = drawn last).
         _cover = FullScreen("Cover", new Color(0, 0, 0, 0));
 
+        BuildToast();        // its own canvas, above everything on this one
+
         SetHull(GameConfig.StartHull, GameConfig.MaxHull);
+    }
+
+    // ---------- layout across aspect ratios ----------
+    // The UI is authored at 1080x1920 portrait. Matching width and height half-and-half is right for
+    // phones, but on anything wider than 9:16 — a landscape browser, a tablet — it shrinks the
+    // canvas's height below the 1920 the layout needs: at 960x600 the menu's gear fell off the
+    // bottom. Wider-than-reference screens therefore match height fully, which keeps every
+    // vertical position on screen and gives the extra width to the margins.
+    private const float RefAspect = 1080f / 1920f;
+    private float _match = 0.5f;
+
+    /// <summary>Canvas units the HUD band takes at the top of the safe area (the clock's caption ends at -256).</summary>
+    public const float PlayTopReserve = HudBlockHeight;
+    /// <summary>Canvas units the gear/RETRY row takes at the bottom of the safe area (it tops out at 136).</summary>
+    public const float PlayBottomReserve = 150f;
+
+    private void ApplyAspect()
+    {
+        _aspectW = Screen.width; _aspectH = Screen.height;
+        _match = _aspectH > 0 && (float)_aspectW / _aspectH > RefAspect + 0.01f ? 1f : 0.5f;
+        if (_scaler != null) _scaler.matchWidthOrHeight = _match;
+        if (_toastScaler != null) _toastScaler.matchWidthOrHeight = _match;
+    }
+
+    /// <summary>
+    /// Screen pixels at the top and bottom that belong to the HUD, so the camera can fit the maze
+    /// in what is left. Computed with CanvasScaler's own formula rather than read from the canvas,
+    /// whose scale factor only catches up a frame after a resize.
+    /// </summary>
+    public void GetPlayfieldInsets(out float topPx, out float bottomPx)
+    {
+        if (Screen.width != _aspectW || Screen.height != _aspectH) ApplyAspect();
+        float logW = Mathf.Log(Screen.width / 1080f, 2f), logH = Mathf.Log(Screen.height / 1920f, 2f);
+        float scale = Mathf.Pow(2f, Mathf.Lerp(logW, logH, _match));
+        Rect safe = Screen.safeArea;
+        topPx = (Screen.height - safe.yMax) + PlayTopReserve * scale;
+        bottomPx = safe.yMin + PlayBottomReserve * scale;
     }
 
     // ---------- public API ----------
@@ -508,6 +550,7 @@ public partial class UIManager : MonoBehaviour
 
     public void ShowStart(int currentLevel, int dayStreak, bool dailyDone, bool dailyUnlocked)
     {
+        HideToast();
         // Where they are, and what they are heading for. A "best" figure was dropped from here —
         // it only ever tells a player they were once further along than they are now — and the
         // space is far better spent naming the next milestone, which is something to play TOWARD
@@ -619,7 +662,7 @@ public partial class UIManager : MonoBehaviour
         ShowInGameGear(false);
         ShowHud(false);          // no gameplay readouts behind the menu
     }
-    public void HideStart() { _startOverlay.SetActive(false); ShowInGameGear(true); ShowHud(true); }
+    public void HideStart() { _startOverlay.SetActive(false); ShowInGameGear(true); ShowHud(true); HideToast(); }
 
     /// <summary>Toggle the entire gameplay HUD (readouts + in-game gear).</summary>
     public void ShowHud(bool show)
@@ -650,6 +693,7 @@ public partial class UIManager : MonoBehaviour
 
     public void ShowCelebration(int level)
     {
+        HideToast();
         _celebTitle.text = Spaced("LEVEL " + level + " CLEAR");
         _celebTitle.color = TitleText;
         NeonColor(_celebTitle, Accent, 0.85f);
@@ -793,6 +837,8 @@ public partial class UIManager : MonoBehaviour
         TickHudPulse(dt);
         TickGrades(dt);
         TickResetHint(dt);
+        TickToast(dt);
+        if (Screen.width != _aspectW || Screen.height != _aspectH) ApplyAspect();
 
         // Flash / darken decay.
         if (_flashA > 0f) { _flashA = Mathf.Max(0f, _flashA - dt * 2.2f); _flash.color = new Color(_flashColor.r, _flashColor.g, _flashColor.b, _flashA); }
@@ -1441,6 +1487,7 @@ public partial class UIManager : MonoBehaviour
 
     public void OpenLevelSelect(int startAt)
     {
+        HideToast();
         if (_levelPanel == null) return;
         _levelUnlocked = Mathf.Clamp(SaveData.CurrentLevel, 1, LevelSelectMax);
         _levelSelected = Mathf.Clamp(startAt, 1, _levelUnlocked);
@@ -1460,6 +1507,7 @@ public partial class UIManager : MonoBehaviour
 
     public void CloseLevelSelect()
     {
+        HideToast();
         if (_levelPanel != null) _levelPanel.SetActive(false);
         if (Audio != null) Audio.PlayButton();
     }
@@ -1640,6 +1688,7 @@ public partial class UIManager : MonoBehaviour
     /// </summary>
     public void ShowFailPanel(string headline, string detail, System.Action onRetry)
     {
+        HideToast();
         if (_failPanel == null) return;
         _onFailRetry = onRetry;
         _failHead.text = Spaced(headline);
@@ -1736,7 +1785,7 @@ public partial class UIManager : MonoBehaviour
         _settingsPanel.SetActive(true);
     }
 
-    public void CloseSettings() => _settingsPanel.SetActive(false);
+    public void CloseSettings() { _settingsPanel.SetActive(false); HideToast(); }
     public bool SettingsOpen => _settingsPanel != null && _settingsPanel.activeSelf;
 
     /// <summary>Fired when the player picks a different sonar colour in settings.</summary>
@@ -1884,14 +1933,21 @@ public partial class UIManager : MonoBehaviour
                 StartCoroutine(SettleReminderPermission(GameNotifications.BeginPermissionRequest()));
         });
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // A browser can't vibrate a desktop and WebGL has no local notifications, so neither row
+        // would do anything. LayoutSettings stacks only the active rows, so the card just shrinks.
+        hapticBtn.gameObject.SetActive(false);
+        notifBtn.gameObject.SetActive(false);
+#endif
+
         // Long-press on the reminders row arms a probe that fires 60 seconds after the app is
         // backgrounded. "Do reminders reach a closed app" is otherwise a question that takes until
         // tomorrow morning to answer, and every tester report so far has been a guess.
         notifHold.OnHeld = () =>
         {
             GameNotifications.ScheduleTest(60f);
-            ShowBanner("TEST REMINDER ARMED\n<size=55%>Leave the app now — it arrives in about a minute.\n"
-                       + GameNotifications.Status + "</size>", Accent, 5f);
+            ShowToast("TEST REMINDER ARMED\n<size=60%>Leave the app now — it arrives in about a minute.\n"
+                      + GameNotifications.Status + "</size>", Accent, 5f);
             Debug.Log("[Sonarfall] Reminder test armed: " + GameNotifications.Status);
         };
 
@@ -1904,7 +1960,7 @@ public partial class UIManager : MonoBehaviour
         hold.OnHeld = () =>
         {
             Haptics.SelfTest(this);
-            ShowBanner("VIBRATION TEST\n<size=55%>" + Haptics.Status + "</size>", Accent, 4f);
+            ShowToast("VIBRATION TEST\n<size=60%>" + Haptics.Status + "</size>", Accent, 4f);
             Debug.Log("[Sonarfall] Haptics self-test: " + Haptics.Status);
         };
 
@@ -1943,7 +1999,7 @@ public partial class UIManager : MonoBehaviour
             int count = SaveData.SonarColoursUnlocked;
             if (count <= 1)
             {
-                ShowBanner("CLEAR A SECTOR\n<size=55%>to earn a sonar colour named after it</size>", Accent, 1.4f);
+                ShowToast("CLEAR A SECTOR\n<size=60%>to earn a sonar colour named after it</size>", Accent);
                 return;
             }
             SaveData.SonarColour = (SaveData.SonarColour + 1) % count;

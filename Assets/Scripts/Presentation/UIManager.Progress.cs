@@ -467,6 +467,7 @@ public partial class UIManager
 
         ShowHud(false);
         ShowInGameGear(false);
+        HideToast();
         _resultPanel.SetActive(true);
         _resultPanel.transform.SetAsLastSibling();
         if (_teachPanel != null) _teachPanel.transform.SetAsLastSibling();
@@ -476,6 +477,7 @@ public partial class UIManager
 
     public void HideResult()
     {
+        HideToast();
         if (_resultPanel != null) _resultPanel.SetActive(false);
         _resPrimary = null; _resSecondary = null;
     }

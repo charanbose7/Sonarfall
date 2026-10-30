@@ -1556,21 +1556,48 @@ public partial class GameManager : MonoBehaviour
         ReturnToMenu();
     }
 
+    /// <summary>
+    /// Fit the maze into the band of screen between the HUD at the top and the gear/RETRY row at
+    /// the bottom, at any aspect ratio, and centre it in that band.
+    ///
+    /// It used to fit the maze to the whole screen. In portrait that happened to work, because a
+    /// square maze is width-bound and leaves room above and below; in a landscape browser window it
+    /// is height-bound, so it filled the screen top to bottom and ran under the HUD — the clock
+    /// drew inside the maze's top row and the exit's ring ran into the LEVEL header.
+    /// </summary>
     private void FitCamera(MazeData maze)
     {
         _cam.orthographic = true;
-        float aspect = _cam.aspect;
+        _fitW = Screen.width; _fitH = Screen.height;
+        float sw = Mathf.Max(1f, Screen.width), sh = Mathf.Max(1f, Screen.height);
+
+        float topPx, bottomPx;
+        _ui.GetPlayfieldInsets(out topPx, out bottomPx);
+        // Never let the reserves squeeze the maze into a sliver on an extreme window shape.
+        float bandH = Mathf.Max(sh * 0.45f, sh - topPx - bottomPx);
+        if (bandH >= sh) { bandH = sh; bottomPx = 0f; }
+
         float halfH = maze.worldHeight * 0.5f + GameConfig.CameraPadding;
         float halfW = maze.worldWidth * 0.5f + GameConfig.CameraPadding;
-        _baseOrthoSize = Mathf.Max(halfH, halfW / aspect); // fits any aspect (portrait -> width bound)
+        float ppu = Mathf.Min(bandH / (2f * halfH), sw / (2f * halfW));   // screen pixels per world unit
+        _baseOrthoSize = sh / (2f * ppu);
         _cam.orthographicSize = _baseOrthoSize;
-        _camBase = new Vector3(maze.worldCenter.x, maze.worldCenter.y, -10f);
+
+        // Shift so the maze sits in the middle of the band rather than the middle of the screen.
+        float bandCentre = bottomPx + bandH * 0.5f;
+        float offsetWorld = (bandCentre - sh * 0.5f) / ppu;
+        _camBase = new Vector3(maze.worldCenter.x, maze.worldCenter.y - offsetWorld, -10f);
         _cam.transform.position = _camBase;
     }
+
+    private int _fitW, _fitH;
 
     private void LateUpdate()
     {
         float dt = Time.unscaledDeltaTime; // survive hitstop (timeScale 0)
+
+        // A resized window (WebGL, desktop, a rotated tablet) refits the maze to the new band.
+        if (_maze != null && (Screen.width != _fitW || Screen.height != _fitH)) FitCamera(_maze);
 
         // Punch-zoom: snap in, ease back out.
         float size = _baseOrthoSize;
