@@ -1232,6 +1232,10 @@ public partial class GameManager : MonoBehaviour
 
         // ---- Celebration panel ----
         _ui.ShowCelebration(_level);
+        // The world's glows go dark under the card. They are additive sprites that draw on their
+        // own schedule, and the exit's pulsing ring was animating straight through the title and
+        // the stars. The exit burst particles stay: they ARE the celebration.
+        SetGameplayVisuals(false);
         // The Daily is one standalone maze, so "LEVEL 1 CLEAR" is meaningless there — and its
         // title must win over the sector/clutch variants, which belong to the ladder.
         if (_isDaily)
@@ -1307,6 +1311,7 @@ public partial class GameManager : MonoBehaviour
         // real progress, so replaying level 3 at level 47 must not reset CONTINUE to 4.
         if (_level > SaveData.CurrentLevel) SaveData.CurrentLevel = _level;
         BuildLevel(_level);                                 // camera + player swap, hidden by the cover
+        SetGameplayVisuals(true);                           // back on for the new maze, still under the cover
         _ui.HideCelebration();
         State = GameState.Playing;
 
