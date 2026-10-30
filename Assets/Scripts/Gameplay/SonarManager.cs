@@ -65,13 +65,13 @@ public class SonarManager : MonoBehaviour
         _fxContainer = container.transform;
         _fxContainer.SetParent(transform, false);
 
-        var mat = new Material(Shader.Find("Sonarfall/Additive")) { name = "SonarFxMat" };
-
-        _rings = BuildPool("Ring", VisualUtils.Ring(), mat, 40);
-        _flashes = BuildPool("Flash", VisualUtils.RadialGlow(), mat, 45);
+        // Each pool gets the material for its own texture (VisualUtils.AdditiveFor). The rings and
+        // flashes used to share one, and were drawn with a single texture between them.
+        _rings = BuildPool("Ring", VisualUtils.Ring(), 40);
+        _flashes = BuildPool("Flash", VisualUtils.RadialGlow(), 45);
     }
 
-    private Pooled[] BuildPool(string name, Sprite sprite, Material mat, int sorting)
+    private Pooled[] BuildPool(string name, Sprite sprite, int sorting)
     {
         var pool = new Pooled[PoolSize];
         for (int i = 0; i < PoolSize; i++)
@@ -79,8 +79,7 @@ public class SonarManager : MonoBehaviour
             var go = new GameObject(name + i);
             go.transform.SetParent(_fxContainer, false);
             var sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = sprite;
-            sr.sharedMaterial = mat;
+            VisualUtils.SetAdditive(sr, sprite);
             sr.sortingOrder = sorting;
             go.SetActive(false);
             pool[i] = new Pooled { tr = go.transform, sr = sr, active = false };

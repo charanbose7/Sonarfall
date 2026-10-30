@@ -41,7 +41,9 @@ public class GameBootstrap : MonoBehaviour
 #endif
         }
 
-        _glowMat = new Material(Shader.Find("Sonarfall/Additive")) { name = "GlowMat" };
+        // The trail's own material: a LineRenderer has no sprite, so it stays untextured (white).
+        // Every sprite takes its material from VisualUtils.AdditiveFor instead.
+        _glowMat = new Material(Shader.Find("Sonarfall/Additive")) { name = "TrailMat" };
         _glowSprite = VisualUtils.RadialGlow();
 
         // ---- Camera ----
@@ -93,8 +95,7 @@ public class GameBootstrap : MonoBehaviour
         var glow = new GameObject("Glow");
         glow.transform.SetParent(playerGO.transform, false);
         var glowSR = glow.AddComponent<SpriteRenderer>();
-        glowSR.sprite = _glowSprite;
-        glowSR.sharedMaterial = _glowMat;
+        VisualUtils.SetAdditive(glowSR, _glowSprite);
         glowSR.color = GameConfig.PlayerColor;
         glowSR.sortingOrder = 50;
         glow.transform.localScale = Vector3.one * GameConfig.PlayerGlowScale;
@@ -103,8 +104,7 @@ public class GameBootstrap : MonoBehaviour
         var halo = new GameObject("Halo");
         halo.transform.SetParent(playerGO.transform, false);
         var haloSR = halo.AddComponent<SpriteRenderer>();
-        haloSR.sprite = _glowSprite;
-        haloSR.sharedMaterial = _glowMat;
+        VisualUtils.SetAdditive(haloSR, _glowSprite);
         haloSR.color = GameConfig.PlayerColor;
         haloSR.sortingOrder = 49; // behind the core glow (50)
         halo.AddComponent<PulseGlow>().Configure(
@@ -135,8 +135,7 @@ public class GameBootstrap : MonoBehaviour
         // ---- Exit glow ----
         var exitGO = new GameObject("Exit");
         var exitSR = exitGO.AddComponent<SpriteRenderer>();
-        exitSR.sprite = _glowSprite;
-        exitSR.sharedMaterial = _glowMat;
+        VisualUtils.SetAdditive(exitSR, _glowSprite);
         exitSR.color = GameConfig.ExitColor;
         exitSR.sortingOrder = 30;
 

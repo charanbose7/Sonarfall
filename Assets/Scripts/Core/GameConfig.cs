@@ -299,7 +299,8 @@ public static class GameConfig
     public static readonly Color StreakColor     = new Color(1.0f, 0.6f, 0.15f, 1f); // flame
     public static readonly Color BonusOrbColor   = new Color(1.0f, 0.85f, 0.25f, 1f); // gold reward
     public static readonly Color HunterColor     = new Color(1.0f, 0.18f, 0.32f, 1f); // crimson eyes
-    public static readonly Color GateColor       = new Color(0.55f, 0.95f, 1.0f, 1f); // ice-white bars
+    public static readonly Color GateColor       = new Color(0.55f, 0.95f, 1.0f, 1f); // ice-white bars (open)
+    public static readonly Color GateShutColor   = new Color(1.0f, 0.32f, 0.36f, 1f); // red outline (shut)
     public static readonly Color StillHazeColor  = new Color(0.010f, 0.025f, 0.060f, 1f); // murk
     public static readonly Color StillEdgeColor  = new Color(0.45f, 0.62f, 0.85f, 1f);
     public static readonly Color CurrentColor    = new Color(0.55f, 0.90f, 0.95f, 1f);

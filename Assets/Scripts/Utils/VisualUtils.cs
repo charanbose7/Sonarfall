@@ -15,6 +15,36 @@ public static class VisualUtils
     // eleven 128x128 RGBA textures plus eleven Sprites, all pixel-identical.
     private static readonly Dictionary<string, Sprite> _cache = new Dictionary<string, Sprite>(16);
 
+    // ---- Additive materials, one per texture ----
+    // Every SpriteRenderer drawn with Sonarfall/Additive takes its material from here.
+    //
+    // Sprites that shared ONE additive material but had different textures were all drawn with a
+    // single texture in the Editor and the Android build — whichever sprite led the batch — while
+    // WebGL drew each correctly. That is why the Editor showed the decoys as plain rings and the
+    // exit reticle and the gates as squares, and why the builds looked different from each other.
+    // One material per texture, with that texture also set as the material's own _MainTex, leaves
+    // the batcher nothing to get wrong on any platform.
+    private static readonly Dictionary<Texture, Material> _additive = new Dictionary<Texture, Material>(24);
+    private static Shader _additiveShader;
+
+    /// <summary>The shared Sonarfall/Additive material for this sprite's texture.</summary>
+    public static Material AdditiveFor(Sprite sprite)
+    {
+        var tex = sprite.texture;
+        if (_additive.TryGetValue(tex, out var m) && m != null) return m;
+        if (_additiveShader == null) _additiveShader = Shader.Find("Sonarfall/Additive");
+        m = new Material(_additiveShader) { name = "Additive" + tex.width + "_" + _additive.Count, mainTexture = tex };
+        _additive[tex] = m;
+        return m;
+    }
+
+    /// <summary>Give a SpriteRenderer a sprite and the additive material that matches it.</summary>
+    public static void SetAdditive(SpriteRenderer sr, Sprite sprite)
+    {
+        sr.sprite = sprite;
+        sr.sharedMaterial = AdditiveFor(sprite);
+    }
+
     private static Sprite Cached(string key, Func<Sprite> build)
     {
         // The null test also catches a Unity object destroyed under us (editor domain reload), so
@@ -50,6 +80,7 @@ public static class VisualUtils
     public static Sprite HunterEyes(int size = 128) => Cached("HunterEyes" + size, () => BuildHunterEyes(size));
     public static Sprite Chevron(int size = 64) => Cached("Chevron" + size, () => BuildChevron(size));
     public static Sprite Pixel() => Cached("Pixel", BuildPixel);
+    public static Sprite OutlineBar() => Cached("OutlineBar", BuildOutlineBar);
     public static Sprite SoftDisc(int size = 128) => Cached("SoftDisc" + size, () => BuildSoftDisc(size));
     public static Sprite DepthGradient() => Cached("DepthGradient", BuildDepthGradient);
 
@@ -251,6 +282,31 @@ public static class VisualUtils
         var px = new Color[size * size];
         for (int i = 0; i < px.Length; i++) px[i] = Color.white;
         return Finish(tex, px, size);
+    }
+
+    /// <summary>
+    /// A gate half: a thin outlined rectangle with a faint fill, 9-sliced so the outline stays the
+    /// same weight however long the bar is drawn. Meant for SpriteRenderer.drawMode = Sliced.
+    /// At 100 px per unit the 3 px line is 0.03 world units — the same hairline as the walls'
+    /// glow edge, so a gate reads as line art like everything else rather than a solid block.
+    /// </summary>
+    private static Sprite BuildOutlineBar()
+    {
+        const int size = 32, line = 3, border = 8;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var px = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            bool edge = x < line || y < line || x >= size - line || y >= size - line;
+            px[y * size + x] = new Color(1f, 1f, 1f, edge ? 1f : 0.10f);
+        }
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply(false, true);
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f,
+                             0, SpriteMeshType.FullRect, new Vector4(border, border, border, border));
     }
 
     /// <summary>Flat disc with a soft rim — the murk of a still-water patch.</summary>

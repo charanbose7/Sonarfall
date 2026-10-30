@@ -70,7 +70,7 @@ public partial class GameManager
     // =========================================================================================
     //  Setup
     // =========================================================================================
-    private void InitHazards(Material additive)
+    private void InitHazards()
     {
         var root = new GameObject("Hazards").transform;
         root.SetParent(transform, false);
@@ -80,8 +80,7 @@ public partial class GameManager
             var go = new GameObject("Hunter" + i);
             go.transform.SetParent(root, false);
             var sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = VisualUtils.HunterEyes();
-            sr.sharedMaterial = additive;
+            VisualUtils.SetAdditive(sr, VisualUtils.HunterEyes());
             sr.color = new Color(0f, 0f, 0f, 0f);
             sr.sortingOrder = 33;
             go.transform.localScale = Vector3.one * (GameConfig.CellSize * 0.85f);
@@ -96,8 +95,8 @@ public partial class GameManager
             var col = go.AddComponent<BoxCollider2D>();
             col.enabled = false;
             var g = new Gate { col = col };
-            g.a = NewBar(go.transform, "A", additive);
-            g.b = NewBar(go.transform, "B", additive);
+            g.a = NewBar(go.transform, "A");
+            g.b = NewBar(go.transform, "B");
             go.SetActive(false);
             _gates[i] = g;
         }
@@ -121,8 +120,7 @@ public partial class GameManager
             var ego = new GameObject("StillEdge" + i);
             ego.transform.SetParent(root, false);
             var e = ego.AddComponent<SpriteRenderer>();
-            e.sprite = VisualUtils.HollowRing();
-            e.sharedMaterial = additive;
+            VisualUtils.SetAdditive(e, VisualUtils.HollowRing());
             e.color = new Color(0f, 0f, 0f, 0f);
             e.sortingOrder = 7;
             ego.SetActive(false);
@@ -137,8 +135,7 @@ public partial class GameManager
                 var go = new GameObject("Current" + i + "_" + k);
                 go.transform.SetParent(root, false);
                 var sr = go.AddComponent<SpriteRenderer>();
-                sr.sprite = VisualUtils.Chevron();
-                sr.sharedMaterial = additive;
+                VisualUtils.SetAdditive(sr, VisualUtils.Chevron());
                 sr.color = new Color(0f, 0f, 0f, 0f);
                 sr.sortingOrder = 8;
                 go.transform.localScale = Vector3.one * (GameConfig.CellSize * 0.42f);
@@ -149,13 +146,13 @@ public partial class GameManager
         }
     }
 
-    private static SpriteRenderer NewBar(Transform parent, string name, Material additive)
+    private static SpriteRenderer NewBar(Transform parent, string name)
     {
         var go = new GameObject(name);
         go.transform.SetParent(parent, false);
         var sr = go.AddComponent<SpriteRenderer>();
-        sr.sprite = VisualUtils.Pixel();
-        sr.sharedMaterial = additive;
+        VisualUtils.SetAdditive(sr, VisualUtils.OutlineBar());
+        sr.drawMode = SpriteDrawMode.Sliced;      // outline weight stays fixed as the bar slides
         sr.color = new Color(0f, 0f, 0f, 0f);
         sr.sortingOrder = 26;
         return sr;
@@ -464,27 +461,46 @@ public partial class GameManager
             float half = g.span * 0.5f * (1f - open);
             Vector2 endA = g.centre - g.along * (g.span * 0.5f);
             Vector2 endB = g.centre + g.along * (g.span * 0.5f);
-            float stub = Mathf.Max(half, 0.05f);            // a frame stays visible even when open
+            // A door frame stays visible even when open. The floor is the outline sprite's two
+            // borders, below which a sliced sprite stops shrinking and starts to deform.
+            float stub = Mathf.Max(half, GateMinStub);
             PlaceBar(g.a, endA + g.along * (stub * 0.5f), stub, g.along);
             PlaceBar(g.b, endB - g.along * (stub * 0.5f), stub, g.along);
 
-            // Light: never fully dark, brighter under a ping, and a nervous flicker in the last
-            // half-second before it shuts — the telegraph that makes the timing fair.
+            // Colour carries the state: ice-cyan outline while open, red and pulsing while shut,
+            // and a red flicker in the last half-second before it shuts — the telegraph that makes
+            // the timing fair. Never fully dark, and brighter under a ping.
             float reveal = _sonar.RevealAt(g.centre);
-            float tel = !g.closed && t > openSecs - GameConfig.GateTelegraph && t < openSecs
-                ? (Mathf.Repeat(Time.time * 14f, 1f) > 0.5f ? 0.55f : 0.15f) : 0f;
-            float alpha = Mathf.Clamp01(GameConfig.GateIdleGlow + (g.closed ? 0.35f : 0f) + reveal * 0.7f + tel);
-            var c = GameConfig.GateColor; c.a = alpha;
+            bool warning = !g.closed && t > openSecs - GameConfig.GateTelegraph && t < openSecs;
+            Color c;
+            if (g.closed)
+            {
+                c = GameConfig.GateShutColor;
+                c.a = Mathf.Clamp01(0.62f + 0.3f * Mathf.Sin(Time.time * 9f) + reveal * 0.3f);
+            }
+            else if (warning)
+            {
+                c = Mathf.Repeat(Time.time * 14f, 1f) > 0.5f ? GameConfig.GateShutColor : GameConfig.GateColor;
+                c.a = Mathf.Clamp01(0.55f + reveal * 0.4f);
+            }
+            else
+            {
+                c = GameConfig.GateColor;
+                c.a = Mathf.Clamp01(GameConfig.GateIdleGlow + reveal * 0.7f);
+            }
             g.a.color = c; g.b.color = c;
         }
     }
 
+    private const float GateMinStub = 0.17f;   // 2 x the outline sprite's 0.08 border, plus a hair
+    private const float GateBarThick = 0.22f;  // wider than a wall, so the outline reads as a door
+
     private static void PlaceBar(SpriteRenderer sr, Vector2 centre, float length, Vector2 along)
     {
         sr.transform.position = new Vector3(centre.x, centre.y, 0f);
+        sr.transform.localScale = Vector3.one;
         bool vertical = Mathf.Abs(along.y) > 0.5f;
-        float thick = GameConfig.WallThickness * 1.15f;
-        sr.transform.localScale = vertical ? new Vector3(thick, length, 1f) : new Vector3(length, thick, 1f);
+        sr.size = vertical ? new Vector2(GateBarThick, length) : new Vector2(length, GateBarThick);
     }
 
     // =========================================================================================

@@ -113,7 +113,6 @@ public partial class GameManager : MonoBehaviour
         // Decoy pool. Each is a lure — a lit bulb on a curved stalk — with a ring of jaws behind it
         // that only the sonar shows. They were plain orange glows, which under the commonest
         // colour blindness were the same khaki as the exit: the shape now says "bait" on its own.
-        var decoyMat = new Material(Shader.Find("Sonarfall/Additive")) { name = "DecoyMat" };
         var ballSprite = VisualUtils.Lure();
         var ringSprite = VisualUtils.Jaws();
         var container = new GameObject("Decoys").transform;
@@ -128,7 +127,7 @@ public partial class GameManager : MonoBehaviour
             var go = new GameObject("Decoy" + i);
             go.transform.SetParent(container, false);
             var sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = ballSprite; sr.sharedMaterial = decoyMat;
+            VisualUtils.SetAdditive(sr, ballSprite);
             sr.color = GameConfig.DecoyColor; sr.sortingOrder = 28;
             go.transform.localScale = Vector3.one * (GameConfig.CellSize * 0.7f);
             go.SetActive(false);
@@ -138,7 +137,7 @@ public partial class GameManager : MonoBehaviour
             var rgo = new GameObject("DecoyRing" + i);
             rgo.transform.SetParent(container, false);
             var rsr = rgo.AddComponent<SpriteRenderer>();
-            rsr.sprite = ringSprite; rsr.sharedMaterial = decoyMat;
+            VisualUtils.SetAdditive(rsr, ringSprite);
             rsr.color = GameConfig.DecoyRingColor; rsr.sortingOrder = 29;
             // Bigger than the ball so the outline sits clearly AROUND it (ring ~0.86*scale across).
             rgo.transform.localScale = Vector3.one * (GameConfig.CellSize * 1.35f);
@@ -153,8 +152,7 @@ public partial class GameManager : MonoBehaviour
         var orbGO = new GameObject("BonusOrb");
         orbGO.transform.SetParent(transform, false);
         _orbSR = orbGO.AddComponent<SpriteRenderer>();
-        _orbSR.sprite = VisualUtils.Crystal();
-        _orbSR.sharedMaterial = decoyMat;
+        VisualUtils.SetAdditive(_orbSR, VisualUtils.Crystal());
         _orbSR.color = GameConfig.BonusOrbColor;
         _orbSR.sortingOrder = 31;
         orbGO.SetActive(false);
@@ -163,8 +161,7 @@ public partial class GameManager : MonoBehaviour
         var exitRingGO = new GameObject("ExitRing");
         exitRingGO.transform.SetParent(transform, false);
         _exitRingSR = exitRingGO.AddComponent<SpriteRenderer>();
-        _exitRingSR.sprite = VisualUtils.DashedRing();
-        _exitRingSR.sharedMaterial = decoyMat;
+        VisualUtils.SetAdditive(_exitRingSR, VisualUtils.DashedRing());
         _exitRingSR.color = GameConfig.ExitColor;
         _exitRingSR.sortingOrder = 29;
 
@@ -177,15 +174,14 @@ public partial class GameManager : MonoBehaviour
             var rgo = new GameObject("ExitRipple" + i);
             rgo.transform.SetParent(transform, false);
             var rsr = rgo.AddComponent<SpriteRenderer>();
-            rsr.sprite = VisualUtils.Ring();
-            rsr.sharedMaterial = decoyMat;
+            VisualUtils.SetAdditive(rsr, VisualUtils.Ring());
             rsr.color = new Color(0f, 0f, 0f, 0f);
             rsr.sortingOrder = 27;
             _exitRipples[i] = rsr;
             _rippleAge[i] = -1f;
         }
 
-        InitHazards(decoyMat);
+        InitHazards();
     }
 
     /// <summary>
@@ -1619,6 +1615,8 @@ public partial class GameManager : MonoBehaviour
         _failStreak = 0;
         _level = Mathf.Max(1, level);
         _ui.HideTeachCard();
+        _ui.HideFailPanel();
+        _ui.HideResult();
         SetGameplayVisuals(true);
         BuildLevel(_level);
         _ui.HideStart();
