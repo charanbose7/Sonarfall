@@ -54,13 +54,14 @@ public static class ShareUtil
             // the result screen. Fall through to the clipboard.
             Debug.LogWarning("[Sonarfall] Share sheet failed, copying instead: " + e.Message);
         }
-#elif UNITY_WEBGL && !UNITY_EDITOR
+#endif
+#if UNITY_WEBGL && !UNITY_EDITOR
         _pending = done;
         SonarfallShareText(text, OnWebResult);
-        return;
-#endif
+#else
         GUIUtility.systemCopyBuffer = text;
         if (done != null) done(Result.Copied);
+#endif
     }
 
 #if UNITY_WEBGL && !UNITY_EDITOR
