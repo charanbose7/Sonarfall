@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#03060c">
+    <title>Sonarfall</title>
+    <style>
+      /* Sonarfall's web page: one 9:16 portrait canvas, letterboxed on the game's own near-black,
+         as large as the window allows. The game is laid out for a phone held upright; a landscape
+         canvas ran the maze under the HUD (fix list W1/W5). */
+      html, body {
+        margin: 0; padding: 0; width: 100%; height: 100%;
+        background: #03060c; overflow: hidden;
+        font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+        color: #8fc7ea;
+        -webkit-user-select: none; user-select: none;
+        touch-action: none;
+      }
+      #stage {
+        position: fixed; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+      }
+      #frame {
+        position: relative;
+        /* Fit 9:16 inside the window, whichever edge runs out first. dvh tracks the mobile
+           browser's collapsing toolbars; vh is the fallback for browsers without it. */
+        height: min(100vh, calc(100vw * 16 / 9));
+        width: min(100vw, calc(100vh * 9 / 16));
+        height: min(100dvh, calc(100vw * 16 / 9));
+        width: min(100vw, calc(100dvh * 9 / 16));
+        background: #03060c;
+        box-shadow: 0 0 80px rgba(70, 150, 210, 0.08);
+      }
+      #unity-canvas {
+        display: block; width: 100%; height: 100%;
+        background: #03060c; outline: none;
+      }
+      #loading {
+        position: absolute; inset: 0;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 28px; background: #03060c;
+        transition: opacity 0.4s ease;
+      }
+      #loading.done { opacity: 0; pointer-events: none; }
+      #brand {
+        font-size: clamp(22px, 7.5vmin, 46px); letter-spacing: 0.42em; padding-left: 0.42em;
+        color: #d8f3ff; font-weight: 300;
+        text-shadow: 0 0 18px rgba(115, 215, 255, 0.55);
+      }
+      #bar { width: 56%; height: 3px; background: rgba(115, 215, 255, 0.14); overflow: hidden; }
+      #bar-fill {
+        width: 0%; height: 100%; background: #73d7ff;
+        box-shadow: 0 0 10px #73d7ff; transition: width 0.15s linear;
+      }
+      #status { font-size: 12px; letter-spacing: 0.3em; opacity: 0.7; }
+      #error {
+        display: none; position: absolute; left: 8%; right: 8%; top: 50%; transform: translateY(-50%);
+        padding: 22px; border: 1px solid #ff6b6b; background: rgba(20, 6, 10, 0.92);
+        color: #ffd2d2; font-size: 14px; line-height: 1.5; text-align: center;
+      }
+      #error b { display: block; color: #ff8a8a; letter-spacing: 0.25em; margin-bottom: 8px; }
+      #fullscreen {
+        position: fixed; right: 14px; bottom: 14px; width: 40px; height: 40px;
+        border: 1px solid rgba(115, 215, 255, 0.55); background: rgba(3, 6, 12, 0.6);
+        color: #73d7ff; font-size: 20px; line-height: 38px; text-align: center;
+        cursor: pointer; display: none;
+      }
+      #fullscreen:hover { background: rgba(115, 215, 255, 0.12); }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="frame">
+        <canvas id="unity-canvas" tabindex="-1"></canvas>
+        <div id="loading">
+          <div id="brand">SONARFALL</div>
+          <div id="bar"><div id="bar-fill"></div></div>
+          <div id="status">DESCENDING</div>
+        </div>
+        <div id="error"></div>
+      </div>
+    </div>
+    <div id="fullscreen" title="Fullscreen">&#x26F6;</div>
+    <script>
+      var canvas = document.querySelector("#unity-canvas");
+      var errorBox = document.querySelector("#error");
+
+      // Errors go on the page, not into alert(): an alert blocks the tab and says nothing useful.
+      function showError(message) {
+        errorBox.innerHTML = "<b>COULDN'T START</b>" + String(message)
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;");
+        errorBox.style.display = "block";
+        document.querySelector("#loading").classList.add("done");
+      }
+      // Non-fatal Unity warnings are only logged; the game has no use for a warning ribbon.
+      function unityShowBanner(msg, type) {
+        if (type === "error") showError(msg); else console.warn(msg);
+      }
+
+      var buildUrl = "Build";
+      var loaderUrl = buildUrl + "/{{{ LOADER_FILENAME }}}";
+      var config = {
+        arguments: [],
+        dataUrl: buildUrl + "/{{{ DATA_FILENAME }}}",
+        frameworkUrl: buildUrl + "/{{{ FRAMEWORK_FILENAME }}}",
+#if USE_WASM
+        codeUrl: buildUrl + "/{{{ CODE_FILENAME }}}",
+#endif
+#if SYMBOLS_FILENAME
+        symbolsUrl: buildUrl + "/{{{ SYMBOLS_FILENAME }}}",
+#endif
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: {{{ JSON.stringify(COMPANY_NAME) }}},
+        productName: {{{ JSON.stringify(PRODUCT_NAME) }}},
+        productVersion: {{{ JSON.stringify(PRODUCT_VERSION) }}},
+        showBanner: unityShowBanner,
+        // Saves (PlayerPrefs) persist without the deprecated manual JS_FileSystem_Sync.
+        autoSyncPersistentDataPath: true,
+        // A cheap 2D scene: rendering at 3x on a high-DPI phone buys nothing visible.
+        devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      };
+
+      if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+        document.querySelector("#fullscreen").style.display = "block";
+      }
+
+      var script = document.createElement("script");
+      script.src = loaderUrl;
+      script.onerror = function () { showError("The game files could not be loaded. Check your connection and reload."); };
+      script.onload = function () {
+        createUnityInstance(canvas, config, function (progress) {
+          document.querySelector("#bar-fill").style.width = (100 * progress) + "%";
+        }).then(function (unityInstance) {
+          document.querySelector("#loading").classList.add("done");
+          document.querySelector("#fullscreen").onclick = function () { unityInstance.SetFullscreen(1); };
+        }).catch(function (message) {
+          showError(message);
+        });
+      };
+      document.body.appendChild(script);
+    </script>
+  </body>
+</html>
