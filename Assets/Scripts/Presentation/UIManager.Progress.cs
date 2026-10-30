@@ -401,10 +401,15 @@ public partial class UIManager
         shareBtn.onClick.AddListener(() =>
         {
             if (string.IsNullOrEmpty(_resShareText)) return;
-            bool sheet = ShareUtil.ShareText(_resShareText);
-            // In the editor (and anywhere without a share sheet) the line goes to the clipboard,
-            // and the banner says so rather than leaving the button looking dead.
-            if (!sheet) ShowBanner("COPIED\n<size=55%>" + _resShareText.Split('\n')[0] + "</size>", Gold, 1.6f);
+            string line = _resShareText.Split('\n')[0];
+            // Only say COPIED once the copy has actually happened — on WebGL that is a browser
+            // promise, so the toast waits for it. A share sheet speaks for itself; a cancelled
+            // one needs no comment.
+            ShareUtil.ShareText(_resShareText, r =>
+            {
+                if (r == ShareUtil.Result.Copied) ShowToast("COPIED\n<size=60%>" + line + "</size>", Gold);
+                else if (r == ShareUtil.Result.Failed) ShowToast("COULDN'T COPY\n<size=60%>your browser blocked the clipboard</size>", Danger);
+            });
         });
 
         TMP_Text okLbl;
