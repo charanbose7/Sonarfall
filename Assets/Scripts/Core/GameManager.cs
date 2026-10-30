@@ -5,12 +5,15 @@ using UnityEngine;
 public enum GameState { Start, Playing, Celebrating, Tutorial }
 
 /// <summary>
-/// The brain: level flow, ping budget, fail timer, streak + star scoring, rubber-banding,
-/// the twists (moving exit, decoys), near-miss exit glow, and the whole level-clear
-/// celebration (hitstop -> burst -> flash -> punch-zoom -> rolling score -> star pops ->
+/// The brain: level flow, ping budget, fail timer, hull (lives), grades, rubber-banding,
+/// the twists (moving exit, decoys), near-miss exit glow, first-encounter callouts, and the
+/// whole level-clear celebration (hitstop -> burst -> flash -> punch-zoom -> grade stars ->
 /// auto-advance). Everything else is handed to it by GameBootstrap.
+///
+/// Split across files: the sector rules (hunter, gates, still water, currents) live in
+/// GameManager.Hazards.cs and the endless DESCENT mode in GameManager.Descent.cs.
 /// </summary>
-public class GameManager : MonoBehaviour
+public partial class GameManager : MonoBehaviour
 {
     public GameState State { get; private set; } = GameState.Start;
 
@@ -37,9 +40,14 @@ public class GameManager : MonoBehaviour
 
     // Progress.
     private int _level = 1;
-    private int _stars;        // lives for THIS level: 3 at the start, 0 fails it
+    private int _hull;         // plates left for THIS level: 3 at the start, 0 fails it
     private int _pings, _pingsStart;
     private int _failStreak;   // consecutive fails on the current level (rubber-banding)
+
+    // What this attempt will be graded on (see GameConfig.GradeFor).
+    private bool _damageTaken;
+    private int _revealsUsed;
+    private float _levelElapsed;   // real seconds played, for the Daily's shareable time
 
     // Level state.
     private MazeData _maze;
@@ -55,9 +63,15 @@ public class GameManager : MonoBehaviour
     private float _exitMoveTimer;
     private readonly List<Vector2Int> _nbrScratch = new List<Vector2Int>(4);
 
-    // Decoys.
-    private SpriteRenderer[] _decoySR;      // pulsing hazard ball
-    private SpriteRenderer[] _decoyRingSR;  // hollow highlight ring, lit by the sonar reveal
+    // Exit beacon: ripples that leave the exit on every pip of its sound.
+    private SpriteRenderer[] _exitRipples;
+    private float[] _rippleAge;
+    private int _nextRipple;
+    private float _beaconT;
+
+    // Decoys — anglerfish lures.
+    private SpriteRenderer[] _decoySR;      // the lit lure, swaying on its stalk
+    private SpriteRenderer[] _decoyRingSR;  // the jaws behind it, shown by the sonar reveal
     private Vector2[] _decoyPos;
     private float[] _decoyHideUntil;
     private float[] _decoyPhase;
@@ -96,10 +110,12 @@ public class GameManager : MonoBehaviour
 
         _tutorial = gameObject.AddComponent<TutorialController>();
 
-        // Decoy pool.
+        // Decoy pool. Each is a lure — a lit bulb on a curved stalk — with a ring of jaws behind it
+        // that only the sonar shows. They were plain orange glows, which under the commonest
+        // colour blindness were the same khaki as the exit: the shape now says "bait" on its own.
         var decoyMat = new Material(Shader.Find("Sonarfall/Additive")) { name = "DecoyMat" };
-        var ballSprite = VisualUtils.RadialGlow(); // the pulsing hazard
-        var ringSprite = VisualUtils.HollowRing(); // the reveal highlight (clean circle outline)
+        var ballSprite = VisualUtils.Lure();
+        var ringSprite = VisualUtils.Jaws();
         var container = new GameObject("Decoys").transform;
         container.SetParent(transform, false);
         _decoySR = new SpriteRenderer[GameConfig.MaxDecoys];
@@ -130,24 +146,46 @@ public class GameManager : MonoBehaviour
             _decoyRingSR[i] = rsr;
         }
 
-        // Bonus Echo orb — a golden reward hidden in a dead-end, findable only by pinging.
+        // Bonus Echo — a gold crystal hidden in a dead-end, findable only by pinging. A cut gem
+        // that spins, where the decoy is a round light that sways: under protanopia the two were
+        // the same yellow-brown, and the thing that cracks your hull looked like the thing that
+        // mends it.
         var orbGO = new GameObject("BonusOrb");
         orbGO.transform.SetParent(transform, false);
         _orbSR = orbGO.AddComponent<SpriteRenderer>();
-        _orbSR.sprite = ballSprite;
+        _orbSR.sprite = VisualUtils.Crystal();
         _orbSR.sharedMaterial = decoyMat;
         _orbSR.color = GameConfig.BonusOrbColor;
         _orbSR.sortingOrder = 31;
         orbGO.SetActive(false);
 
-        // Exit target ring — a pulsing green marker that makes the destination pop.
+        // Exit reticle — a turning dashed ring, so the destination reads as a target by shape.
         var exitRingGO = new GameObject("ExitRing");
         exitRingGO.transform.SetParent(transform, false);
         _exitRingSR = exitRingGO.AddComponent<SpriteRenderer>();
-        _exitRingSR.sprite = VisualUtils.HollowRing();
+        _exitRingSR.sprite = VisualUtils.DashedRing();
         _exitRingSR.sharedMaterial = decoyMat;
         _exitRingSR.color = GameConfig.ExitColor;
         _exitRingSR.sortingOrder = 29;
+
+        // Beacon ripples: one leaves the exit on every pip of its sound, so the beacon can be
+        // seen as well as heard — and the two always agree.
+        _exitRipples = new SpriteRenderer[3];
+        _rippleAge = new float[3];
+        for (int i = 0; i < _exitRipples.Length; i++)
+        {
+            var rgo = new GameObject("ExitRipple" + i);
+            rgo.transform.SetParent(transform, false);
+            var rsr = rgo.AddComponent<SpriteRenderer>();
+            rsr.sprite = VisualUtils.Ring();
+            rsr.sharedMaterial = decoyMat;
+            rsr.color = new Color(0f, 0f, 0f, 0f);
+            rsr.sortingOrder = 27;
+            _exitRipples[i] = rsr;
+            _rippleAge[i] = -1f;
+        }
+
+        InitHazards(decoyMat);
     }
 
     /// <summary>
@@ -171,6 +209,8 @@ public class GameManager : MonoBehaviour
         if (_exitSR != null) _exitSR.enabled = on;
         if (_exitRingSR != null) _exitRingSR.enabled = on;
         if (_orbSR != null) _orbSR.enabled = on;
+        if (_exitRipples != null)
+            for (int i = 0; i < _exitRipples.Length; i++) _exitRipples[i].enabled = on;
 
         if (_decoySR != null)
             for (int i = 0; i < _decoySR.Length; i++)
@@ -178,6 +218,7 @@ public class GameManager : MonoBehaviour
                 if (_decoySR[i] != null) _decoySR[i].enabled = on;
                 if (_decoyRingSR[i] != null) _decoyRingSR[i].enabled = on;
             }
+        SetHazardVisuals(on);
     }
 
     private Renderer[] _playerRenderers;
@@ -186,20 +227,24 @@ public class GameManager : MonoBehaviour
     public void StartGame()
     {
         SaveData.ApplySettings();
+        _audio.ApplyMix();
+        _player.SetColour(GameConfig.SonarColour(SaveData.SonarColour));
 
         // Every way into a level goes through the one-time notification prompt first.
         _ui.OnPlay = () => AfterFirstRunPrompt(BeginEndlessRun);
         _ui.OnDaily = () => AfterFirstRunPrompt(BeginDailyRun);
-        _ui.OnDailyResultClosed = ReturnToMenu;
+        _ui.OnDescent = () => AfterFirstRunPrompt(BeginDescent);
         _ui.OnResetLevel = ResetLevel;
         _ui.OnHome = GoHome;
         _ui.OnLevelChosen = level => AfterFirstRunPrompt(() => BeginRunAtLevel(level));
+        _ui.OnSonarColour = c => _player.SetColour(c);
         _ui.Audio = _audio;     // lets the UI layer make noise without reaching for a singleton
 
         ReturnToMenu();
     }
 
     private bool _promptInFlight;
+    private bool _menuPreview;          // BuildLevel is only dressing the menu's backdrop
 
     /// <summary>
     /// The notification permission is asked exactly once, the first time the player taps into a
@@ -241,17 +286,26 @@ public class GameManager : MonoBehaviour
     private void ReturnToMenu()
     {
         if (_tutorial != null) _tutorial.Hide();   // never let the tutorial overlay sit on the menu
-        _ui.HideTeachCard();                       // nor an explainer from the run we just left
+        _ui.HideTeachCard();                       // nor a callout from the run we just left
         _ui.HideFailPanel();                       // nor a fail screen we never pressed RETRY on
-        SetGameplayVisuals(true);                  // and never leave the glows hidden on the menu
+        _ui.HideResult();
         _levelBusy = false;
         _ui.SetResetInteractable(true);
         _isDaily = false;
+        _isDescent = false;
         _failStreak = 0;
         _level = SaveData.CurrentLevel;     // the menu previews where they'll pick up
-        _dayStreak = SaveData.DayStreak;
+        _dayStreak = SaveData.LiveStreak;   // as it stands today, not as last written
+        Time.timeScale = 1f;
 
-        BuildLevel(_level);                 // something alive behind the menu
+        _menuPreview = true;                // no sector banner or riser over the menu
+        BuildLevel(_level);                 // the maze's walls stay faintly alive behind the menu...
+        _menuPreview = false;
+        // ...but its glows do not. The exit ring and the player's halo sat on top of the
+        // SONARFALL logo on a fresh install, reading as stray UI. Every way into a level turns
+        // them back on.
+        SetGameplayVisuals(false);
+        _audio.SilenceWorld();
         State = GameState.Start;
         _ui.ShowStart(_level, _dayStreak, SaveData.DailyDone, SaveData.RunFinished);
     }
@@ -288,8 +342,9 @@ public class GameManager : MonoBehaviour
         _ui.SetResetInteractable(true);
 
         _isDaily = false;
+        _isDescent = false;
         _failStreak = 0;
-        _stars = GameConfig.StartStars;              // a new run never inherits a carried gold star
+        _hull = GameConfig.StartHull;                // a new run never inherits a carried gold plate
         _level = Mathf.Max(1, level);
         _dayStreak = SaveData.RegisterDailyVisit();  // opening the game counts toward the streak
         _dailyBonusPending = true;                   // spent by the first level this session builds
@@ -306,6 +361,7 @@ public class GameManager : MonoBehaviour
 
         BuildLevel(_level);
         _ui.HideStart();
+        _ui.SetRetryVisible(true);
         State = runTutorial ? GameState.Tutorial : GameState.Playing;
         if (runTutorial)
         {
@@ -326,7 +382,6 @@ public class GameManager : MonoBehaviour
                 _pingNudgeArmed = true;
                 _pingNudgeT = 0f;
             }
-            MaybeTeachLevel();
         }
     }
 
@@ -337,32 +392,40 @@ public class GameManager : MonoBehaviour
     /// </summary>
     private void BeginDailyRun()
     {
+        StopAllCoroutines();
+        Time.timeScale = 1f;
         _isDaily = true;
+        _isDescent = false;
         _level = 1; _failStreak = 0;
-        _stars = GameConfig.StartStars;   // the daily is a standalone maze, no carry-over
+        _hull = GameConfig.StartHull;     // the daily is a standalone maze, no carry-over
         _dayStreak = SaveData.RegisterDailyVisit();
 
+        SetGameplayVisuals(true);
         BuildLevel(_level);
         _ui.HideStart();
+        _ui.SetRetryVisible(true);
         State = GameState.Playing;
-        _ui.ShowBanner("DAILY MAZE", new Color(1f, 0.85f, 0.4f, 1f), 1.0f);
-        MaybeTeachLevel();
+        _ui.ShowBanner("DAILY MAZE  #" + SaveData.DailyNumber, new Color(1f, 0.85f, 0.4f, 1f), 1.0f);
     }
 
     private void BuildLevel(int level)
     {
         _pingNudgeArmed = false;   // never let the first-level nudge leak into a later level
-        _profile = GameConfig.GetDifficulty(level, _failStreak);
+        _profile = _isDescent ? GameConfig.GetDescentDifficulty(_descentIndex, _descentSeed)
+                              : GameConfig.GetDifficulty(level, _failStreak);
 
         // The daily run uses the date seed so every player worldwide gets the same layout today.
         int seed = _isDaily ? SaveData.DailySeed : Random.Range(1, int.MaxValue);
         // On the tutorial layout the spawn must open sideways — see MazeGenerator.horizontalStart.
         // Gated on level 1 as well as ShouldRun, matching where the tutorial can actually run.
-        bool tutorialLayout = !_isDaily && level == 1 && _tutorial != null && _tutorial.ShouldRun;
+        bool tutorialLayout = !_isDaily && !_isDescent && level == 1 && _tutorial != null && _tutorial.ShouldRun;
         _maze = MazeGenerator.Generate(_profile.mazeSize, GameConfig.CellSize, seed, tutorialLayout);
 
         // Per-sector palette: re-tint walls and the ping ring so each chapter reads differently.
-        Color sectorColor = GameConfig.SectorWallColor(level);
+        // A dive changes colour every five mazes in the same order, so depth is visible too.
+        Color sectorColor = _isDescent
+            ? GameConfig.SectorWallColors[(_descentIndex / GameConfig.LevelsPerSector) % GameConfig.SectorWallColors.Length]
+            : GameConfig.SectorWallColor(level);
         _wallCtrl.SetGlowColor(sectorColor);
         _sonar.SetRingColor(sectorColor);
 
@@ -379,12 +442,26 @@ public class GameManager : MonoBehaviour
         _exitSR.transform.position = new Vector3(_exitWorld.x, _exitWorld.y, 0f);
         _exitSR.transform.localScale = Vector3.one * (GameConfig.CellSize * 0.8f);
         _exitRingSR.transform.position = new Vector3(_exitWorld.x, _exitWorld.y, 0f);
+        for (int i = 0; i < _exitRipples.Length; i++)
+        {
+            _rippleAge[i] = -1f;
+            _exitRipples[i].color = new Color(0f, 0f, 0f, 0f);
+        }
+        _beaconT = 0.6f;     // first pip shortly after the level appears
 
         _movingExit = _profile.movingExit;
         _exitMoveTimer = _profile.exitMoveInterval;
+        _exitHasMoved = false;
+
+        // The attempt starts clean: graded on what happens from here.
+        _damageTaken = false;
+        _revealsUsed = 0;
+        _levelElapsed = 0f;
+        _clockPulsedThisLevel = false;
 
         PlaceDecoys(_profile.decoyCount);
         PlaceBonusOrb();
+        PlaceHazards();
 
         // Daily-streak reward: extra reveals on your first level of the day.
         // Keyed to the first level of a SESSION, not to level 1.
@@ -404,24 +481,35 @@ public class GameManager : MonoBehaviour
         // The Daily is a standalone one-maze challenge, not level 1 of a run, so it gets its
         // own header instead of borrowing the endless run's level/sector readout.
         if (_isDaily) _ui.SetDailyHeader();
+        else if (_isDescent) SetDescentHud(sectorColor);
         else
         {
             _ui.SetLevel(level);
             _ui.SetSector(GameConfig.SectorName(level), GameConfig.LevelInSector(level),
                           GameConfig.LevelsPerSector, sectorColor);
         }
-        // Every level starts at full health — but a gold overcharge star you are still holding
-        // CARRIES FORWARD. Wiping it at the level boundary made it a one-level trinket; letting it
-        // ride turns finding an echo into something you protect across levels, and gives the extra
-        // life somewhere meaningful to be spent.
-        _stars = Mathf.Clamp(Mathf.Max(_stars, GameConfig.StartStars),
-                             GameConfig.StartStars, GameConfig.OverchargeStars);
-        _ui.SetStars(_stars, GameConfig.MaxStars);
+        if (_isDescent)
+        {
+            // One hull for the whole dive: it carries from maze to maze, cracks and all.
+            _hull = Mathf.Clamp(_hull, 0, GameConfig.ReinforcedHull);
+        }
+        else
+        {
+            // Every level starts with a full hull — but a gold reinforced plate you are still
+            // holding CARRIES FORWARD. Wiping it at the level boundary made it a one-level
+            // trinket; letting it ride turns finding an echo into something you protect.
+            _hull = Mathf.Clamp(Mathf.Max(_hull, GameConfig.StartHull),
+                                GameConfig.StartHull, GameConfig.ReinforcedHull);
+        }
+        _ui.SetHull(_hull, GameConfig.MaxHull);
 
-        // Announce a new sector as you enter it.
-        if (!_isDaily && GameConfig.LevelInSector(level) == 1 && level > 1)
+        // Announce a new sector as you enter it, with the trailer's rising sweep under it.
+        if (!_isDaily && !_isDescent && !_menuPreview && GameConfig.LevelInSector(level) == 1 && level > 1)
+        {
             _ui.ShowBanner("SECTOR " + (GameConfig.SectorIndex(level) + 1) + "\n" + GameConfig.SectorName(level),
                            sectorColor, 1.3f);
+            _audio.PlayRiser();
+        }
 
         _levelTimer = _profile.timeLimit;
         // Push the clock to the HUD immediately. It used to be written only from TickPlaying, so
@@ -481,13 +569,16 @@ public class GameManager : MonoBehaviour
     {
         if (!_orbActive) return;
 
-        // Lit by the sonar exactly like the walls, with a gentle pulse on top.
+        // Lit by the sonar exactly like the walls, with a gentle pulse on top — and spinning, its
+        // width folding through |cos|, so it reads as a turning gem rather than as a light.
         float reveal = _sonar.RevealAt(_orbPos);
         float pulse = 0.75f + 0.25f * Mathf.Sin(Time.time * GameConfig.BonusOrbPulseSpeed);
         var c = GameConfig.BonusOrbColor;
         c.a = Mathf.Clamp01(reveal * pulse * 1.3f);
         _orbSR.color = c;
-        _orbSR.transform.localScale = Vector3.one * (GameConfig.CellSize * (0.45f + 0.15f * reveal));
+        float size = GameConfig.CellSize * (0.55f + 0.15f * reveal);
+        float spin = 0.25f + 0.75f * Mathf.Abs(Mathf.Cos(Time.time * 2.2f));
+        _orbSR.transform.localScale = new Vector3(size * spin, size, 1f);
 
         // Collect on contact (whether or not it happens to be lit at that instant).
         if (SweptHit(_orbPos, GameConfig.BonusOrbRadius))
@@ -499,38 +590,40 @@ public class GameManager : MonoBehaviour
         _orbActive = false;
         _orbSR.gameObject.SetActive(false);
 
-        // Always worth taking, at every health level. A reward that sometimes pays nothing trains
+        // Always worth taking, at every hull level. A reward that sometimes pays nothing trains
         // players to ignore it, so there are three outcomes and never a null one:
         //
-        //   hurt            -> restore a normal star
-        //   full (3)        -> a fourth, GOLD star
-        //   already gold(4) -> +1 reveal, since a second gold star has nowhere to go
+        //   damaged            -> repair a plate
+        //   full (3)           -> a fourth, GOLD reinforced plate
+        //   already gold (4)   -> +1 reveal, since a second gold plate has nowhere to go
         //
-        // The last case matters because the gold star now carries between levels, so arriving at a
+        // The last case matters because the gold plate carries between levels, so arriving at a
         // level already holding one is common rather than exotic.
-        if (_stars >= GameConfig.OverchargeStars)
+        if (_hull >= GameConfig.ReinforcedHull)
         {
             _pings++;
             _ui.SetPingsRemaining(_pings);
             _ui.ShowBanner("BONUS ECHO\n+1 REVEAL", GameConfig.BonusOrbColor, 0.9f);
-            _audio.PlayOvercharge();
+            _audio.PlayReinforced();
             _ui.Flash(0.3f);
         }
-        else if (_stars >= GameConfig.MaxStars)
+        else if (_hull >= GameConfig.MaxHull)
         {
-            _stars = GameConfig.OverchargeStars;
-            _ui.SetStars(_stars, GameConfig.MaxStars);
-            _ui.ShowBanner("OVERCHARGED\n+1 GOLD STAR", GameConfig.BonusOrbColor, 0.9f);
-            _audio.PlayOvercharge();
+            _hull = GameConfig.ReinforcedHull;
+            _ui.SetHull(_hull, GameConfig.MaxHull);
+            _ui.ShowBanner("REINFORCED\n+1 GOLD PLATE", GameConfig.BonusOrbColor, 0.9f);
+            _audio.PlayReinforced();
             _ui.Flash(0.35f);
             _shakeTimer = Mathf.Max(_shakeTimer, 0.12f);
+            TeachHud("hull");
         }
         else
         {
-            _stars = Mathf.Min(GameConfig.MaxStars, _stars + GameConfig.BonusOrbStars);
-            _ui.SetStars(_stars, GameConfig.MaxStars);
-            _ui.ShowBanner("BONUS ECHO\n+1 STAR", GameConfig.BonusOrbColor, 0.7f);
-            _audio.PlayStarGained();
+            _hull = Mathf.Min(GameConfig.MaxHull, _hull + GameConfig.BonusOrbHull);
+            _ui.SetHull(_hull, GameConfig.MaxHull);
+            _ui.ShowBanner("BONUS ECHO\nHULL REPAIRED", GameConfig.BonusOrbColor, 0.7f);
+            _audio.PlayHullRepaired();
+            TeachHud("hull");
         }
 
         _ui.FlashColor(GameConfig.BonusOrbColor, 0.3f);
@@ -566,7 +659,7 @@ public class GameManager : MonoBehaviour
             // Never stack two decoys in one cell. On a short solution path the even spacing
             // rounds several slots onto the same index — with a path of 8 cells and 5 decoys the
             // indices come out 3,3,4,5,5. Two decoys sharing a cell used to be cosmetic; now that
-            // a hit costs a life it is a trap: you lose a star, rewind, and the twin is still
+            // a hit costs a plate it is a trap: you crack one, rewind, and the twin is still
             // sitting there waiting to take the next one.
             if (idx <= lastIdx) idx = lastIdx + 1;
             if (idx > hi) break;                    // ran out of room — fewer decoys, not stacked ones
@@ -615,7 +708,6 @@ public class GameManager : MonoBehaviour
         // they learned the button existed and not that it was the whole game.
         _pingNudgeArmed = true;
         _pingNudgeT = 0f;
-        MaybeTeachLevel();          // level 1 may still have an orb to introduce
     }
 
     // ---- first-level ping nudge ----
@@ -629,73 +721,106 @@ public class GameManager : MonoBehaviour
     public Camera GameCamera { get { return _cam; } }
 
     /// <summary>
-    /// Explain a mechanic the first time the player actually meets one, at the top of the level
-    /// that contains it.
+    /// Teach by doing: pause and say one line the moment the player first actually MEETS
+    /// something — not at the top of the level that happens to contain it.
     ///
-    /// Keyed off what was really placed, not off the level number: the orb only turns up on some
-    /// levels, so "level 5 introduces decoys" would happily fire the orb lesson on a level with
-    /// no orb in it and teach nothing.
+    /// The old explainer cards fired before the level began, about things the player could not
+    /// yet see, and were dismissed unread. Now the decoy line waits until a lit decoy is within
+    /// reach, the bonus-echo line until a ping has actually found one, the drifting-exit line
+    /// until the exit has visibly moved. The thing being explained is on screen, frozen, with a
+    /// marker on it.
     ///
-    /// At most one card per level. Two stacked modals before a level starts is a wall of text,
-    /// and whatever loses the race will still be there to explain the next time it appears.
+    /// Keyed off what was really placed, never off the level number, and at most one per frame;
+    /// whatever loses the race is still there to be explained a moment later.
     /// </summary>
-    private void MaybeTeachLevel()
+    private void CheckFirstEncounters()
     {
-        if (State != GameState.Playing) return;
+        if (State != GameState.Playing || _ui.TeachOpen || _player.IsRewinding) return;
+        Vector2 pp = _player.transform.position;
 
-        // Decoys first when both are new: they are the one mechanic that PUNISHES you, and a
-        // player who doesn't understand them reads the rewind as the game malfunctioning.
+        // A decoy close enough to matter, and lit. They are the one mechanic that PUNISHES you,
+        // and a player who doesn't know what they are reads the rewind as the game breaking.
         if (_decoyCount > 0 && !SaveData.TaughtDecoy)
         {
-            SaveData.MarkTaughtDecoy();
-            _ui.ShowTeachCard(
-                "DECOYS",
-                "These pulse in and out along your route.\n\n" +
-                "Touch one while it is <b>solid</b> and it costs you <b>a star</b> and " +
-                Mathf.RoundToInt(GameConfig.DecoyTimePenalty) + " seconds.\n\n" +
-                "Lose all three stars and the level restarts.",
-                UIManager.Danger, GameConfig.DecoyColor, null);
-            return;
+            for (int i = 0; i < _decoyCount; i++)
+            {
+                if (Time.time < _decoyHideUntil[i]) continue;
+                if ((_decoyPos[i] - pp).magnitude > GameConfig.DecoyCalloutRadius) continue;
+                if (DecoyVisibility(i) < 0.55f && _sonar.RevealAt(_decoyPos[i]) < 0.4f) continue;
+                SaveData.MarkTaughtDecoy();
+                ShowDecoyFrozen(i);
+                _ui.ShowTeachCard("DECOY", "Touch it while it's lit and your hull cracks.",
+                                  UIManager.Danger, GameConfig.DecoyColor, null,
+                                  _cam, _decoyPos[i], "DECOY", VisualUtils.Lure());
+                return;
+            }
         }
 
-        // Paired decoys. Same hazard, new rule — without naming it the player just experiences a
+        // Paired decoys. Same hazard, new rule — without naming it the player just meets a
         // corridor that got mysteriously harder, which reads as unfair rather than as a new idea.
-        if (_decoyCount >= 2 && _level >= GameConfig.DecoyGateLevel && !SaveData.TaughtGate)
+        if (_decoyCount >= 2 && _level >= GameConfig.DecoyGateLevel && !_isDescent && !SaveData.TaughtGate)
         {
-            SaveData.MarkTaughtGate();
-            _ui.ShowTeachCard(
-                "PAIRED DECOYS",
-                "Some decoys now come in twos.\n\n" +
-                "They <b>take turns</b> — when one goes dark, the other lights up.\n\n" +
-                "Watch the rhythm and cross when both are dark.",
-                UIManager.Danger, GameConfig.DecoyColor, null);
-            return;
+            Vector2 mid = (_decoyPos[0] + _decoyPos[1]) * 0.5f;
+            if ((mid - pp).magnitude < GameConfig.DecoyCalloutRadius + 0.6f)
+            {
+                SaveData.MarkTaughtGate();
+                ShowDecoyFrozen(0); ShowDecoyFrozen(1);
+                _ui.ShowTeachCard("PAIRED DECOYS", "They take turns. Cross in the gap.",
+                                  UIManager.Danger, GameConfig.DecoyColor, null,
+                                  _cam, new Vector3(mid.x, mid.y, 0f), "PAIR", VisualUtils.Lure());
+                return;
+            }
         }
 
-        // The moving exit debuts on level 6. Without a word of warning the player pings, commits
-        // to a route, and arrives at an empty cell — which reads as the game cheating.
-        if (_movingExit && !SaveData.TaughtMovingExit)
+        // The exit's first move. Without a word the player pings, commits to a route and arrives
+        // at an empty cell — which reads as the game cheating. Said the moment it visibly drifts.
+        if (_movingExit && _exitHasMoved && !SaveData.TaughtMovingExit)
         {
             SaveData.MarkTaughtMovingExit();
-            _ui.ShowTeachCard(
-                "THE EXIT MOVES",
-                "From here the way out drifts between cells.\n\n" +
-                "Don't just remember where it was — watch where it goes.",
-                UIManager.Accent, GameConfig.ExitColor, null,
-                _cam, ExitWorldPos, "EXIT");
+            _ui.ShowTeachCard("THE EXIT DRIFTS", "It moves between cells. Watch where it goes.",
+                              UIManager.Accent, GameConfig.ExitColor, null,
+                              _cam, ExitWorldPos, "EXIT", VisualUtils.DashedRing());
             return;
         }
 
-        if (_orbActive && !SaveData.TaughtOrb)
+        // The bonus echo, the moment a ping finds it — the only moment it is visible at all.
+        if (_orbActive && !SaveData.TaughtOrb && _sonar.RevealAt(_orbPos) > 0.35f)
         {
             SaveData.MarkTaughtOrb();
-            _ui.ShowTeachCard(
-                "BONUS ECHO",
-                "One is hidden in a dead end of this maze.\n\n" +
-                "Only a ping reveals it. Reach it and you get <b>a star back</b>.",
-                UIManager.Gold, GameConfig.BonusOrbColor, null);
+            var c = GameConfig.BonusOrbColor; c.a = 1f;
+            _orbSR.color = c;                       // frozen at full brightness under the callout
+            _ui.ShowTeachCard("BONUS ECHO", "Reach it to repair a hull plate.",
+                              UIManager.Gold, GameConfig.BonusOrbColor, null,
+                              _cam, new Vector3(_orbPos.x, _orbPos.y, 0f), "BONUS", VisualUtils.Crystal());
+            return;
         }
+
+        CheckRuleEncounters(pp);
     }
+
+    /// <summary>Hold a decoy fully lit, jaws showing, while a callout freezes the world on it.</summary>
+    private void ShowDecoyFrozen(int i)
+    {
+        if (i < 0 || i >= _decoyCount) return;
+        var c = GameConfig.DecoyColor; c.a = GameConfig.DecoyMaxAlpha;
+        _decoySR[i].color = c;
+        var rc = GameConfig.DecoyRingColor; rc.a = 1f;
+        _decoyRingSR[i].color = rc;
+    }
+
+    /// <summary>
+    /// Introduce one HUD readout with a pulse, once ever: "clock", "reveals" or "hull". Replaces the
+    /// tutorial cards that pointed at all three before any of them meant anything.
+    /// </summary>
+    private void TeachHud(string item)
+    {
+        if (SaveData.HudTaught(item)) return;
+        SaveData.MarkHudTaught(item);
+        _ui.PulseHud(item);
+    }
+
+    private bool _exitHasMoved;          // set the first time the drifting exit changes cell
+    private bool _clockPulsedThisLevel;
 
     public void RequestPing()
     {
@@ -704,11 +829,7 @@ public class GameManager : MonoBehaviour
         {
             if (_tutorial == null || !_tutorial.PingAllowed) return;
             if (Time.time < _pingReadyTime || _pings <= 0) return;
-            _pings--;
-            _ui.SetPingsRemaining(_pings);
-            _ui.DarkFlash();
-            _sonar.EmitPing(_player.transform.position);
-            _pingReadyTime = Time.time + GameConfig.PingCooldown;
+            SpendPing();
             _tutorial.NotifyPinged();
             return;
         }
@@ -718,12 +839,23 @@ public class GameManager : MonoBehaviour
         if (Time.time < _pingReadyTime) return;  // cooldown: can't spam — wait for the reveal to finish
         if (_pings <= 0) return;                  // out of pings, but you can still move blind
 
+        SpendPing();
+        _pingNudgeArmed = false;         // they found it on their own; say nothing
+        OnPingHazards(_player.transform.position);   // hunters turn toward the sound
+    }
+
+    private float _lastPingTime = -100f;
+
+    private void SpendPing()
+    {
         _pings--;
+        _revealsUsed++;
         _ui.SetPingsRemaining(_pings);
         _ui.DarkFlash();                 // brief darken so the ring burst reads as powerful
         _sonar.EmitPing(_player.transform.position);
         _pingReadyTime = Time.time + GameConfig.PingCooldown;
-        _pingNudgeArmed = false;         // they found it on their own; say nothing
+        _lastPingTime = Time.time;
+        TeachHud("reveals");             // the counter just dropped: this is when it matters
     }
 
     private void Update()
@@ -739,9 +871,10 @@ public class GameManager : MonoBehaviour
             case GameState.Tutorial:
                 // The maze is live so the player can practise, but the level timer is paused and
                 // the exit can't be completed until they've learned both controls.
-                if (_ui.TeachOpen) return;      // the goal card is up — nothing moves behind it
+                if (_ui.TeachOpen) return;      // the goal callout is up — nothing moves behind it
                 UpdateBonusOrb();
                 PulseExit();
+                TickBeacon();
                 return;
 
             case GameState.Playing:
@@ -770,21 +903,26 @@ public class GameManager : MonoBehaviour
                 _pingNudgeArmed = false;
                 _ui.ShowTeachCardAtUI(
                     "TAP TO PING",
-                    "You don't have to feel your way around.\n\n" +
-                    "<b>Tap anywhere</b> to fire a sonar ping and light up the walls near you.",
+                    "Tap anywhere to light up the walls near you.",
                     UIManager.Accent, Color.clear,
                     null,
                     _ui.RevealsRect, "REVEALS", 165f, _ui.RevealsIconRect);
+                return;
             }
         }
 
+        _levelElapsed += Time.deltaTime;
+
         if (_profile.timeLimit > 0f)
         {
+            // The clock introduces itself the first time it ever starts running.
+            if (!_clockPulsedThisLevel) { _clockPulsedThisLevel = true; TeachHud("clock"); }
+
             _levelTimer -= Time.deltaTime;
             int secs = Mathf.CeilToInt(Mathf.Max(0f, _levelTimer));
             _ui.SetTimer(secs);
 
-            // Audio cues: one heads-up at 10s, then a rising tick each of the last 5 seconds.
+            // Audio cues: one heads-up at 10s, then a heartbeat for each of the last 5 seconds.
             if (secs != _lastTickSecond)
             {
                 // Haptics mirror the audio: the countdown is the one cue a player must not
@@ -792,32 +930,60 @@ public class GameManager : MonoBehaviour
                 if (secs == GameConfig.TimerWarnAt) { _audio.PlayTimeWarning(); Haptics.Medium(); }
                 else if (secs >= 1 && secs <= GameConfig.TimerTickFrom)
                 {
-                    _audio.PlayCountdownTick(secs);
-                    if (secs <= 3) Haptics.Medium(); else Haptics.Light();
+                    _audio.PlayHeartbeat(secs);
+                    if (secs <= 3) Haptics.Heavy(); else Haptics.Medium();
                 }
+                _audio.SetTension(secs <= GameConfig.TimerTickFrom ? 1f : secs <= GameConfig.TimerWarnAt ? 0.35f : 0f);
                 _lastTickSecond = secs;
             }
 
-            if (_levelTimer <= 0f) { StartCoroutine(FailRoutine(FailCause.Timeout)); return; }
+            if (_levelTimer <= 0f)
+            {
+                if (_isDescent) { DescentTimeout(); return; }
+                StartCoroutine(FailRoutine(FailCause.Timeout));
+                return;
+            }
         }
         else _ui.SetTimer(-1);
 
         UpdateMovingExit();
         UpdateDecoys();
+        if (State == GameState.Playing) UpdateHazards();
 
-        // UpdateDecoys can end the level outright (last star lost), and a coroutine runs up to
-        // its first yield synchronously — so State is already Celebrating by the time we get
-        // here. Without this the same frame could also start WinRoutine and run a win and a fail
-        // at once. Not currently reachable (decoys are never placed within reach of the exit),
-        // but the cost of the check is nothing and the failure mode is incoherent.
+        // UpdateDecoys / UpdateHazards can end the level outright (last plate lost), and a
+        // coroutine runs up to its first yield synchronously — so State is already Celebrating by
+        // the time we get here. Without this the same frame could also start WinRoutine and run a
+        // win and a fail at once.
         if (State != GameState.Playing) return;
 
         UpdateBonusOrb();
         PulseExit();
+        TickBeacon();
+        CheckFirstEncounters();
+        if (_ui.TeachOpen) return;      // a callout just froze the world; the exit can wait
 
         float exitR = GameConfig.CellSize * 0.4f;
         if (SweptHit(_exitWorld, exitR))
             StartCoroutine(WinRoutine());
+    }
+
+    /// <summary>
+    /// The exit's beacon. Panned toward the exit, louder, higher and faster as you close in — a
+    /// player who has lost the picture can still steer by ear. A ripple leaves the exit on every
+    /// pip, so the beacon is visible as well as audible.
+    /// </summary>
+    private void TickBeacon()
+    {
+        _beaconT -= Time.deltaTime;
+        if (_beaconT > 0f) return;
+
+        Vector2 d = _exitWorld - (Vector2)_player.transform.position;
+        float near = Mathf.Clamp01(1f - d.magnitude / GameConfig.BeaconRange);
+        _beaconT = Mathf.Lerp(GameConfig.BeaconIntervalFar, GameConfig.BeaconIntervalNear, near);
+        _audio.PlayBeacon(Mathf.Clamp(d.x / 3f, -1f, 1f) * 0.85f, Mathf.Lerp(0.16f, 0.5f, near), Mathf.Lerp(0.92f, 1.22f, near));
+
+        _rippleAge[_nextRipple] = 0f;
+        _nextRipple = (_nextRipple + 1) % _exitRipples.Length;
     }
 
     /// <summary>
@@ -855,7 +1021,10 @@ public class GameManager : MonoBehaviour
                     if (_orbCorridor.Contains(_nbrScratch[i])) _nbrScratch.RemoveAt(i);
 
             if (_nbrScratch.Count > 0)
+            {
                 _exitCell = _nbrScratch[Random.Range(0, _nbrScratch.Count)];
+                _exitHasMoved = true;
+            }
         }
 
         Vector2 target = _maze.CellCenter(_exitCell.x, _exitCell.y);
@@ -872,32 +1041,50 @@ public class GameManager : MonoBehaviour
         if (_maze.IsOpen(c.x, c.y, MazeGenerator.W)) outList.Add(new Vector2Int(c.x - 1, c.y));
     }
 
+    /// <summary>0..1 — how solid decoy <paramref name="i"/> is right now (it only bites above DecoyVisibleHit).</summary>
+    private float DecoyVisibility(int i)
+    {
+        float wave = Mathf.Sin(Time.time * _profile.decoyFadeSpeed + _decoyPhase[i]);
+        float vis = Mathf.Clamp01(wave);
+        return vis * vis;
+    }
+
     private void UpdateDecoys()
     {
         float hitRadius = GameConfig.CellSize * GameConfig.DecoyHitRadius;
+        Vector2 pp = _player.transform.position;
 
-        for (int i = 0; i < _decoyCount; i++)
+        for (int i = 0; i < GameConfig.MaxDecoys; i++)
         {
+            if (i >= _decoyCount) { _audio.SetHum(i, 0f, 0f); continue; }
+
             var sr = _decoySR[i];
             bool blackedOut = Time.time < _decoyHideUntil[i]; // just triggered a rewind, stays gone briefly
 
-            // Pulsing orange ball (the hazard): fades in and out on its own phase — slip through
-            // the cell while it's dark, and it only bites while it's visible.
-            float wave = Mathf.Sin(Time.time * _profile.decoyFadeSpeed + _decoyPhase[i]);
-            float vis = Mathf.Clamp01(wave); vis *= vis;
+            // The lure (the hazard): fades in and out on its own phase — slip through the cell
+            // while it's dark, and it only bites while it's lit. It sways on its stalk as it
+            // glows, which no other object does.
+            float vis = DecoyVisibility(i);
             float alpha = blackedOut ? 0f : vis * GameConfig.DecoyMaxAlpha;
             var c = GameConfig.DecoyColor; c.a = alpha;
             sr.color = c;
             sr.transform.localScale = Vector3.one *
                 (GameConfig.CellSize * (GameConfig.DecoyDrawScale + GameConfig.DecoyDrawPulse * vis));
+            sr.transform.localRotation = Quaternion.Euler(0f, 0f, 14f * Mathf.Sin(Time.time * 1.6f + _decoyPhase[i] * 1.3f));
 
-            // Hollow highlight ring around it: lit by the SONAR as the ping front sweeps over the
-            // decoy (same timing as the walls), so a ping also shows you where the decoys are.
+            // The jaws behind it: lit by the SONAR as the ping front sweeps over the decoy (same
+            // timing as the walls), so a ping shows you what the light is attached to.
             float reveal = blackedOut ? 0f : _sonar.RevealAt(_decoyPos[i]);
             var rc = GameConfig.DecoyRingColor; rc.a = Mathf.Clamp01(reveal * 1.25f);
             _decoyRingSR[i].color = rc;
 
-            // Unchanged: only bites while the ball is actually visible. Swept like the exit, so
+            // It hums while it is solid — you can hear when it is safe to cross without looking.
+            float dist = (_decoyPos[i] - pp).magnitude;
+            float near = Mathf.Clamp01(1f - dist / 4.5f);
+            _audio.SetHum(i, blackedOut ? 0f : vis * near * near * 0.6f,
+                          Mathf.Clamp((_decoyPos[i].x - pp.x) / 3f, -1f, 1f) * 0.8f);
+
+            // Unchanged: only bites while the lure is actually lit. Swept like the exit, so
             // flicking through a lit decoy can't dodge the penalty either.
             if (!blackedOut && vis > GameConfig.DecoyVisibleHit &&
                 SweptHit(_decoyPos[i], hitRadius))
@@ -910,32 +1097,43 @@ public class GameManager : MonoBehaviour
 
     private void HitDecoy(int i)
     {
-        // A decoy now costs a life AND time, on top of the rewind. It used to cost only position,
+        // A decoy costs a plate AND time, on top of the rewind. It used to cost only position,
         // which players read as a mild inconvenience — there was no reason to time a crossing when
         // barging through cost you a couple of seconds you probably had spare.
-        _stars = Mathf.Max(0, _stars - GameConfig.DecoyStarCost);
         _levelTimer -= GameConfig.DecoyTimePenalty;
-        _ui.SetStars(_stars, GameConfig.MaxStars);
-        _ui.PulseStarLost();
-
-        _audio.PlayStarLost();               // distinct from the generic "wrong" — a life went
-        Haptics.Wrong();                     // the platform's "error" pattern: unmistakably bad
-        _ui.FlashColor(GameConfig.DecoyColor, 0.3f);
         _fx.PlayDecoyPop(_decoyPos[i]);
-        _shakeTimer = Mathf.Max(_shakeTimer, 0.18f);
         _decoyHideUntil[i] = Time.time + 4f;
+        _audio.SetHum(i, 0f, 0f);
 
-        // Out of lives ends the level there and then — no rewind, because there is nothing left
+        // Out of hull ends the level there and then — no rewind, because there is nothing left
         // to rewind into.
-        if (_stars <= 0)
-        {
-            StartCoroutine(FailRoutine(FailCause.NoStars));
-            return;
-        }
+        if (DamageHull(GameConfig.DecoyColor)) return;
 
         _ui.ShowRewind();
         _ui.PlayRewindEffect();
         _player.TriggerRewind();             // plays the rewind sound + retrace + reveal wipe
+    }
+
+    /// <summary>
+    /// Crack one hull plate, from any source. Returns true if that was the last one — the level
+    /// (or the dive) has already been ended by the time this returns.
+    /// </summary>
+    private bool DamageHull(Color flash, int plates = GameConfig.DecoyHullCost)
+    {
+        _hull = Mathf.Max(0, _hull - plates);
+        _damageTaken = true;                 // the NO DAMAGE star is gone for this attempt
+        _ui.SetHull(_hull, GameConfig.MaxHull);
+        _ui.PulseHullLost();
+        TeachHud("hull");
+
+        _audio.PlayHullLost();               // distinct from the generic "wrong" — a plate went
+        Haptics.Wrong();                     // the platform's "error" pattern: unmistakably bad
+        _ui.FlashColor(flash, 0.3f);
+        _shakeTimer = Mathf.Max(_shakeTimer, 0.18f);
+
+        if (_hull > 0) return false;
+        StartCoroutine(FailRoutine(FailCause.NoHull));
+        return true;
     }
 
     private void PulseExit()
@@ -949,23 +1147,51 @@ public class GameManager : MonoBehaviour
         _exitSR.color = c;
         _exitSR.transform.localScale = Vector3.one * (GameConfig.CellSize * (0.8f + 0.25f * near));
 
-        // Pulsing target ring around the exit, brighter as you approach — makes the goal pop.
+        // Turning dashed reticle around the exit, brighter as you approach — makes the goal pop,
+        // and the rotation means it reads as "the target" even to a player who can't tell its
+        // green from a decoy's orange.
         float ringPulse = 0.5f + 0.5f * Mathf.Sin(Time.time * GameConfig.ExitPulseSpeed * 1.3f);
         _exitRingSR.transform.position = _exitSR.transform.position;
         _exitRingSR.transform.localScale = Vector3.one * (GameConfig.CellSize * (1.25f + 0.12f * ringPulse));
-        var rc = GameConfig.ExitColor; rc.a = 0.28f + 0.22f * ringPulse + 0.4f * near;
+        _exitRingSR.transform.localRotation = Quaternion.Euler(0f, 0f, -Time.time * 38f);
+        var rc = GameConfig.ExitColor; rc.a = 0.32f + 0.22f * ringPulse + 0.4f * near;
         _exitRingSR.color = rc;
+
+        // Beacon ripples (started by TickBeacon in time with the pips).
+        const float rippleLife = 1.5f;
+        for (int i = 0; i < _exitRipples.Length; i++)
+        {
+            if (_rippleAge[i] < 0f) continue;
+            _rippleAge[i] += Time.deltaTime;
+            float k = _rippleAge[i] / rippleLife;
+            if (k >= 1f) { _rippleAge[i] = -1f; _exitRipples[i].color = new Color(0f, 0f, 0f, 0f); continue; }
+            _exitRipples[i].transform.position = _exitSR.transform.position;
+            _exitRipples[i].transform.localScale = Vector3.one * (GameConfig.CellSize * Mathf.Lerp(0.7f, 2.8f, Easing.OutCubic(k)));
+            var pc = GameConfig.ExitColor; pc.a = (1f - k) * (1f - k) * (0.45f + 0.35f * near);
+            _exitRipples[i].color = pc;
+        }
     }
 
     private IEnumerator WinRoutine()
     {
         State = GameState.Celebrating;
+        _audio.SilenceWorld();
 
-        // The stars you WALK OUT WITH are the result now — not a rating computed from leftover
-        // pings. Nothing to calculate: what survived the decoys is what you get.
-        int starsLeft = _stars;
+        // The grade: one star per stated rule. Reaching the exit is always one; keeping the hull
+        // intact is another; spending no more than half the level's reveals is the third.
+        int par = GameConfig.RevealPar(_profile.pings);
+        bool noDamage = !_damageTaken;
+        bool underPar = _revealsUsed <= par;
+        int grade = GameConfig.GradeFor(true, noDamage, _revealsUsed, par);
         bool clutch = _profile.timeLimit > 0f && _levelTimer <= GameConfig.ClutchSeconds;
-        bool sectorDone = GameConfig.IsSectorFinale(_level);
+        bool sectorDone = !_isDaily && !_isDescent && GameConfig.IsSectorFinale(_level);
+
+        // Banked before anything else can interrupt the routine. firstClear is whether this was
+        // the player's frontier level — the only clear that can complete a sector for the first
+        // time and earn its colour.
+        bool firstClear = !_isDaily && !_isDescent && _level >= SaveData.CurrentLevel;
+        int oldGrade = !_isDaily && !_isDescent ? SaveData.LevelGrade(_level) : 0;
+        bool improved = !_isDaily && !_isDescent && SaveData.RecordGrade(_level, grade) && oldGrade > 0;
 
         // Clearing a level unlocks the Daily Maze. This used to live only in FailRoutine, back when
         // the flag meant "played an endless run to its end" — which, in a score run, meant dying.
@@ -998,50 +1224,70 @@ public class GameManager : MonoBehaviour
         yield return new WaitForSecondsRealtime(GameConfig.HitstopTime);
         Time.timeScale = 1f;
 
+        // A dive doesn't stop for a ceremony between mazes; it has its own short beat.
+        if (_isDescent) { yield return DescentClearRoutine(); yield break; }
+
         // ---- Celebration panel ----
         _ui.ShowCelebration(_level);
         // The Daily is one standalone maze, so "LEVEL 1 CLEAR" is meaningless there — and its
-        // title must win over the sector/clutch variants, which belong to the endless run.
+        // title must win over the sector/clutch variants, which belong to the ladder.
         if (_isDaily)
-            _ui.SetCelebrationTitle("DAILY MAZE\nCLEAR", UIManager.Gold);
+            _ui.SetCelebrationTitle("DAILY  #" + SaveData.DailyNumber + "\nCLEAR", UIManager.Gold);
         else if (sectorDone)
             _ui.SetCelebrationTitle("SECTOR CLEAR\n" + GameConfig.SectorName(_level), GameConfig.SectorWallColor(_level));
         else if (clutch)
             _ui.SetCelebrationTitle("CLUTCH CLEAR!", UIManager.Gold);
 
-        // Point at the next milestone the moment the current one is banked. On a sector finale
-        // the title already carries the news; otherwise, once the next sector is close enough to
-        // be worth chasing, name it. Left blank further out so it stays an event rather than a
-        // permanent readout the eye stops seeing.
+        // The line under the grade, in priority order: a sector's reward the first time it is
+        // cleared, then a beaten best on a replay, then the next sector once it is close enough
+        // to chase. Left blank otherwise so it stays an event rather than a readout.
         int nextLevel = _level + 1;
         int toNext = GameConfig.LevelsToNextSector(nextLevel);
-        _ui.SetCelebrationScoreLine(
-            _isDaily || sectorDone || toNext > 2
-                ? ""
-                : GameConfig.NextSectorName(nextLevel) + "   in   " + toNext);
+        int sectorIdx = GameConfig.SectorIndex(_level);
+        string line = "";
+        if (sectorDone && firstClear && sectorIdx < GameConfig.SectorNames.Length)
+        {
+            // Clearing a sector earns a sonar colour named after it.
+            Color earned = GameConfig.SonarColour(sectorIdx + 1);
+            line = "NEW SONAR COLOUR   <color=#" + ColorUtility.ToHtmlStringRGB(earned) + ">"
+                 + GameConfig.SonarColourName(sectorIdx + 1) + "</color>\n<size=70%>pick it in Settings</size>";
+        }
+        else if (sectorDone)
+            line = SaveData.SectorStars(sectorIdx) + " / " + (GameConfig.LevelsPerSector * 3) + " STARS IN " + GameConfig.SectorName(_level);
+        else if (improved)
+            line = "NEW BEST ON LEVEL " + _level;
+        else if (!_isDaily && toNext <= 2)
+            line = GameConfig.NextSectorName(nextLevel) + "   in   " + toNext;
+        _ui.SetCelebrationScoreLine(line);
 
-        // A beat of silence, then the praise word lands. The gap matters: slamming it in on the
-        // same frame as the title makes both read as one blob of text instead of a payoff.
-        yield return new WaitForSecondsRealtime(0.26f);
-        _ui.ShowPraise(GameConfig.PraiseFor(starsLeft),
-                       starsLeft >= GameConfig.MaxStars ? UIManager.Gold : UIManager.Accent);
-        _audio.PlayPraise(starsLeft);
+        // The stars land one at a time, each with its rule underneath — earned or not — so the
+        // player always knows what a missing star was for.
+        yield return new WaitForSecondsRealtime(0.2f);
+        _ui.ShowGrade(true, noDamage, underPar, new[]
+        {
+            "EXIT\n<size=72%>reached</size>",
+            "NO DAMAGE\n<size=72%>" + (noDamage ? "hull intact" : "hull hit") + "</size>",
+            "MAX " + par + " REVEALS\n<size=72%>used " + _revealsUsed + "</size>",
+        });
+        yield return new WaitForSecondsRealtime(UIManager.GradeRowSeconds);
+
+        // Then the word that sums them up lands, with the sting. The gap matters: slamming it in
+        // on the same frame as the stars makes both read as one blob instead of a payoff.
+        Color wordCol = grade >= 3 ? UIManager.Gold : grade == 2 ? UIManager.Accent : new Color(0.75f, 0.85f, 0.95f, 1f);
+        _ui.ShowPraise(GameConfig.GradeWords[grade], wordCol);
+        _audio.PlayGrade(grade, sectorDone);
         Haptics.Success();
         _ui.Flash(0.25f);
         _shakeTimer = Mathf.Max(_shakeTimer, 0.14f);
 
-        // No "new best" callout here. The player can only ever be ON their deepest level —
-        // there is no level select and no way back — so every single clear would trigger it,
-        // which makes it noise rather than an achievement.
-
-        // The daily is a single maze, not a run — finish it and show its own result screen.
+        // The daily is a single maze, not a run — finish it and show its own result card.
         if (_isDaily)
         {
             yield return new WaitForSecondsRealtime(GameConfig.CelebrationTime);
-            bool dailyBest = SaveData.CompleteDaily(starsLeft);
+            bool dailyBest = SaveData.CompleteDaily(grade);
             _ui.HideCelebration();
-            _ui.ShowDailyResult(true, starsLeft, _dayStreak, dailyBest);
-            State = GameState.Start;   // menu buttons take over again via OnDailyResultClosed
+            ShowDailyCard(true, grade, dailyBest);
+            State = GameState.Start;   // the card's CONTINUE takes the player back to the menu
             yield break;
         }
 
@@ -1062,11 +1308,44 @@ public class GameManager : MonoBehaviour
         State = GameState.Playing;
 
         _ui.SetCover(0f);                                   // fade back in on the fresh level
-        MaybeTeachLevel();                                  // ...and introduce anything new on it
+    }
+
+    /// <summary>
+    /// The Daily's result card. Shareable as one line — "Sonarfall Daily #59 · 9.4s · 2 pings" —
+    /// which is the Wordle trick: the result is the advert.
+    /// </summary>
+    private void ShowDailyCard(bool cleared, int grade, bool newBest)
+    {
+        int n = SaveData.DailyNumber;
+        string pings = _revealsUsed + " ping" + (_revealsUsed == 1 ? "" : "s");
+        string secs = _levelElapsed.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "s";
+        string stars = cleared ? StarText(grade) : "";
+
+        string big = cleared ? secs + "   ·   " + pings : "OUT OF TIME";
+        // Words, not ★: the UI fonts have no star glyph (the card draws its stars as sprites).
+        string best = SaveData.DailyBest > 0 ? "best  " + SaveData.DailyBest + "/3 stars" : "";
+        string detail = (newBest ? "<color=#FFD15A>NEW DAILY BEST</color>\n" : "")
+                      + "Day streak  " + _dayStreak + (best.Length > 0 ? "      " + best : "")
+                      + "\n<size=80%>A new maze unlocks tomorrow.</size>";
+        string share = cleared
+            ? "Sonarfall Daily #" + n + " · " + secs + " · " + pings + " · " + stars
+            : "Sonarfall Daily #" + n + " · out of time · " + pings;
+        share += "\n" + GameConfig.StoreUrl;
+
+        _ui.ShowResult("DAILY  #" + n, UIManager.Gold, cleared ? grade : 0, big, detail, share,
+                       "CONTINUE", ReturnToMenu);
+    }
+
+    /// <summary>★★☆ — for share text, where the UI's sprite stars can't go.</summary>
+    private static string StarText(int grade)
+    {
+        var sb = new System.Text.StringBuilder(3);
+        for (int i = 0; i < 3; i++) sb.Append(i < grade ? '★' : '☆');
+        return sb.ToString();
     }
 
     /// <summary>Why a level ended — the banner says which, since the fix differs.</summary>
-    private enum FailCause { Timeout, NoStars }
+    private enum FailCause { Timeout, NoHull }
 
     /// <summary>
     /// Level failed. The maze lights up first so the player sees how close the exit actually was:
@@ -1079,6 +1358,7 @@ public class GameManager : MonoBehaviour
     private IEnumerator FailRoutine(FailCause cause)
     {
         State = GameState.Celebrating;      // reuse the "cutscene" state: input + ticking are off
+        _audio.SilenceWorld();
 
         _failStreak++;
         if (!_isDaily) SaveData.MarkRunFinished();   // finishing a level unlocks the Daily Maze
@@ -1088,14 +1368,24 @@ public class GameManager : MonoBehaviour
 
         // Light the place up so the player can see the route they missed.
         Vector2 playerPos = _player.transform.position;
+        _sonar.SetStillZones(null);                  // the post-mortem shows everything
         _sonar.RevealAll(playerPos, GameConfig.FailRevealTime);
 
-        string head = cause == FailCause.NoStars ? "OUT OF STARS" : "OUT OF TIME";
+        string head = cause == FailCause.NoHull ? "HULL BREACHED" : "OUT OF TIME";
         string detail = ProgressPhrase(playerPos);
 
         // Let the reveal play out on its own first: the point of lighting the maze is to show the
         // route that was missed, and a panel drawn over it defeats that.
         yield return new WaitForSecondsRealtime(GameConfig.FailRevealTime);
+
+        // A breached hull ends a dive outright: that is the whole contract of DESCENT.
+        if (_isDescent)
+        {
+            SetGameplayVisuals(false);
+            ShowDescentCard();
+            State = GameState.Start;
+            yield break;
+        }
 
         // Failing the daily no longer burns the day. It used to call CompleteDaily(0), which locked
         // the button to "DAILY DONE" — so a player who died eight seconds in had nothing left to
@@ -1104,7 +1394,8 @@ public class GameManager : MonoBehaviour
         // once, not in a loss consuming the whole day.
         if (_isDaily)
         {
-            _ui.ShowDailyResult(false, 0, _dayStreak, false);
+            SetGameplayVisuals(false);
+            ShowDailyCard(false, 0, false);
             State = GameState.Start;
             yield break;
         }
@@ -1131,10 +1422,6 @@ public class GameManager : MonoBehaviour
         BuildLevel(_level);
         State = GameState.Playing;
         _ui.SetCover(0f);
-        // The regenerated layout may contain something this player has never met — an orb only
-        // turns up on 18% of levels, so it can easily first appear on a retry rather than on the
-        // clear that would otherwise have introduced it.
-        MaybeTeachLevel();
     }
 
     private bool _failRetryRequested;
@@ -1186,6 +1473,9 @@ public class GameManager : MonoBehaviour
     public void ResetLevel()
     {
         if (State != GameState.Playing && State != GameState.Celebrating) return;
+        // A free re-roll would let a dive skip any maze it didn't like; DESCENT hides the button,
+        // and this is the backstop.
+        if (_isDescent) return;
         // Reject re-entry while a rebuild is already running. This used to StopAllCoroutines() and
         // start over unconditionally, so a second tap could kill the previous routine in the window
         // between SetCover(1f) and SetCover(0f) — the cover never came back down and the game was
@@ -1230,7 +1520,6 @@ public class GameManager : MonoBehaviour
         _ui.SetCover(0f);
         _levelBusy = false;
         _ui.SetResetInteractable(true);
-        MaybeTeachLevel();      // the fresh layout may introduce something new — see FailRoutine
     }
 
     /// <summary>Abandon the level and go back to the menu. Progress is already saved per level.</summary>
@@ -1240,6 +1529,8 @@ public class GameManager : MonoBehaviour
         Time.timeScale = 1f;
         _ui.HideCelebration();
         _ui.SetCover(0f);
+        // Quitting a dive banks the depth reached — walking away is not worse than dying.
+        if (_isDescent) SaveData.RecordDescent(_descentIndex);
         ReturnToMenu();
     }
 
@@ -1298,14 +1589,17 @@ public class GameManager : MonoBehaviour
         StopAllCoroutines();
         Time.timeScale = 1f;
         _isDaily = false;
+        _isDescent = false;
         _failStreak = 0;
         _level = Mathf.Max(1, level);
+        _ui.HideTeachCard();
+        SetGameplayVisuals(true);
         BuildLevel(_level);
         _ui.HideStart();
         _ui.HideCelebration();
         _ui.SetCover(0f);
+        _ui.SetRetryVisible(true);
         State = GameState.Playing;
-        MaybeTeachLevel();   // mirror the real level-entry path, so QA sees what a player sees
     }
 
     /// <summary>

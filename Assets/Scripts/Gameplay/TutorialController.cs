@@ -3,29 +3,28 @@ using UnityEngine.UI;
 using TMPro;
 
 /// <summary>
-/// First-run tutorial, deliberately BLOCKING: playtesters skipped text-only hints entirely and
-/// started with no idea what the controls were, so this refuses to advance until the player has
-/// actually performed each action.
+/// First-run tutorial — teach by doing. It refuses to advance until the player has actually
+/// performed each action, and it explains nothing in advance.
 ///
 ///   Step 1 — an animated finger mimes a drag; the player must really drag the dot.
 ///   Step 2 — the finger mimes a tap; the player must really fire a ping.
-///   Step 3 — a marker points at the exit and the player has to acknowledge it.
-///   Steps 4-6 — the clock, the reveal counter and the star row, each pointed at in turn.
+///   Step 3 — a beat to watch the walls light up (the reveal counter pulses as it drops).
+///   Step 4 — the game pauses on one line pointing at the exit; any tap starts the clock.
 ///
-/// Step 3 exists because the first two teach the controls and nothing else: testers came out of
-/// the old tutorial able to move and ping, were shown "GO!", and had no idea there was anything
+/// The goal callout exists because the first two steps teach the controls and nothing else:
+/// testers came out of the old tutorial able to move and ping and with no idea there was anything
 /// to go *to*. Knowing the buttons is not the same as knowing the goal.
 ///
-/// Steps 4-6 exist for the same reason one level down. Telling someone "reach it before the clock
-/// runs out" is worthless if they cannot say which number on screen is the clock — so each of the
-/// three resources gets its own card with a reticle sitting on the actual HUD element, rather than
-/// one card listing all three in prose.
+/// What it no longer does is walk the player round the HUD. It used to end on three more cards —
+/// THE CLOCK, YOUR REVEALS, YOUR STARS — each with an OK button locked for three seconds, before
+/// level 1 had even started. Each readout now introduces itself with a pulse the first time it
+/// changes (GameManager decides when), which is when the player has a reason to look at it.
 ///
-/// Only ever runs on the very first play (SaveData.HintSeen), and only in the endless run.
+/// Only ever runs on the very first play (SaveData.HintSeen), and only in the level ladder.
 /// </summary>
 public class TutorialController : MonoBehaviour
 {
-    private enum Step { Drag, Ping, Goal, Clock, Reveals, Lives, Done }
+    private enum Step { Drag, Ping, Look, Goal, Done }
 
     private GameManager _gm;
     private UIManager _ui;
@@ -43,6 +42,9 @@ public class TutorialController : MonoBehaviour
     private Vector2 _lastPlayerPos;
     private bool _running;
 
+    /// <summary>How long to let the first reveal play before pointing at the exit.</summary>
+    private const float LookSeconds = 1.3f;
+
     /// <summary>True when this player has never completed the tutorial.</summary>
     public bool ShouldRun => !SaveData.HintSeen;
 
@@ -57,17 +59,18 @@ public class TutorialController : MonoBehaviour
         _step = Step.Drag; _t = 0f; _dragAccum = 0f;
         // Must be cleared, not just the step index. This controller survives a progress reset, so
         // a leftover _pinged from the previous run satisfied the ping gate the instant the drag
-        // step finished — the tutorial jumped straight from "DRAG TO MOVE" to "GO!".
+        // step finished — the tutorial jumped straight from "DRAG TO MOVE" to the exit.
         _pinged = false;
         _lastPlayerPos = player.transform.position;
         BuildUI();
+        if (_root != null) _root.SetActive(true);
         _running = true;
         SetStepText();
     }
 
     private void BuildUI()
     {
-        if (_root != null) { _root.SetActive(true); return; }
+        if (_root != null) return;
 
         _canvas = GetComponentInChildren<Canvas>();
         if (_canvas == null) return;
@@ -87,11 +90,11 @@ public class TutorialController : MonoBehaviour
         if (titleFont == null) titleFont = TMP_Settings.defaultFontAsset;
         if (bodyFont  == null) bodyFont  = titleFont;
 
-        // Dim the maze slightly so the instruction reads, without hiding the game.
+        // A light dim — the player is playing, not reading, so the maze stays the main thing.
         var dim = new GameObject("Dim");
         dim.transform.SetParent(_root.transform, false);
         var dimImg = dim.AddComponent<Image>();
-        dimImg.color = new Color(0.01f, 0.015f, 0.03f, 0.55f);
+        dimImg.color = new Color(0.01f, 0.015f, 0.03f, 0.35f);
         dimImg.raycastTarget = false;
         var drt = dimImg.rectTransform;
         drt.anchorMin = Vector2.zero; drt.anchorMax = Vector2.one; drt.offsetMin = Vector2.zero; drt.offsetMax = Vector2.zero;
@@ -207,82 +210,37 @@ public class TutorialController : MonoBehaviour
             // GameManager tells us when a ping actually fired.
             if (_pinged)
             {
-                _step = Step.Goal;
+                // Get out of the way and let the reveal be the lesson: the walls bloom, the
+                // counter drops and pulses, and only then does anything else get said.
+                _step = Step.Look;
+                _t = 0f;
+                if (_root != null) _root.SetActive(false);
                 Haptics.Light();
-                ShowGoal();
             }
+        }
+        else if (_step == Step.Look)
+        {
+            if (_t >= LookSeconds) ShowGoal();
         }
     }
 
     /// <summary>
-    /// Last step: stop miming controls and show what they are for. The teach card brings its own
-    /// veil and marker, so this overlay gets out of the way entirely rather than stacking two
-    /// dimmed layers and two titles on top of each other.
+    /// Last step: one line, pointing at the exit. The callout brings its own veil and marker and
+    /// pauses the world; the clock starts on the tap that dismisses it.
     /// </summary>
     private void ShowGoal()
     {
+        _step = Step.Goal;
         _running = false;                            // nothing left to animate here
-        if (_root != null) _root.SetActive(false);
         if (_ui == null || _gm == null) { Finish(); return; }
 
         _ui.ShowTeachCard(
-            "FIND THE EXIT",
-            "That marker is the way out.\n\n" +
-            "Ping to remember the walls, then reach it before the clock runs out.",
+            "THE EXIT",
+            "Reach it before the clock runs out.",
             UIManager.Accent, GameConfig.ExitColor,
-            ShowClock,
-            _gm.GameCamera, _gm.ExitWorldPos, "EXIT");
-    }
-
-    /// <summary>Step 4 — which number is the clock.</summary>
-    private void ShowClock()
-    {
-        _step = Step.Clock;
-        _ui.ShowTeachCardAtUI(
-            "THE CLOCK",
-            "This is your time.\n\n" +
-            "Run it down to zero and the level restarts.",
-            UIManager.Danger, Color.clear,
-            ShowReveals,
-            // Capped by geometry, not taste. Measured HUD column, top to bottom:
-            //   LEVEL     883..946
-            //   SHALLOWS  855..886
-            //   34        741..856   <- the number's top edge is 856
-            //   SECONDS   728..754
-            // The sector caption starts 1px above the number, so a ring wide enough to enclose a
-            // 143x115 glyph (radius ~92) unavoidably cuts through it. 165 is the largest that
-            // still reads as circling the clock rather than slicing the heading.
-            _ui.TimerRect, "TIME", 165f);
-    }
-
-    /// <summary>Step 5 — the reveal budget, the actual scarce resource.</summary>
-    private void ShowReveals()
-    {
-        _step = Step.Reveals;
-        _ui.ShowTeachCardAtUI(
-            "YOUR REVEALS",
-            "Every ping costs one of these.\n\n" +
-            "Run out and you can still move — but you'll be doing it from memory, in the dark.",
-            UIManager.Accent, Color.clear,
-            ShowLives,
-            // Both halves of the readout: the digit sits at x 445 and the dot at 506, so anchoring
-            // on the digit alone left the icon outside the ring. Centred on the pair it lands at 479.
-            _ui.RevealsRect, "REVEALS", 165f, _ui.RevealsIconRect);
-    }
-
-    /// <summary>Step 6 — stars are lives, not a score.</summary>
-    private void ShowLives()
-    {
-        _step = Step.Lives;
-        _ui.ShowTeachCardAtUI(
-            "YOUR STARS",
-            "These are your lives — <b>" + GameConfig.StartStars + "</b> per level.\n\n" +
-            "Hitting a decoy costs one. Lose them all and the level restarts.",
-            UIManager.Gold, Color.clear,
             Finish,
-            // Bigger than the others on purpose: this ring has to enclose all three stars, which
-            // span 124px centre-to-centre plus the star width either side.
-            _ui.StarsRect, "LIVES", 250f);
+            _gm.GameCamera, _gm.ExitWorldPos, "EXIT",
+            VisualUtils.DashedRing());
     }
 
     private bool _pinged;
@@ -290,7 +248,7 @@ public class TutorialController : MonoBehaviour
     public void NotifyPinged() => _pinged = true;
 
     /// <summary>Is the tutorial currently blocking the ping action? (Drag step must come first.)</summary>
-    public bool PingAllowed => _step != Step.Drag;
+    public bool PingAllowed => _step == Step.Ping;
 
     /// <summary>Force the overlay away (e.g. when bailing back to the main menu).</summary>
     public void Hide()
@@ -305,8 +263,6 @@ public class TutorialController : MonoBehaviour
         _step = Step.Done;
         SaveData.MarkHintSeen();
         if (_root != null) _root.SetActive(false);
-        // No "GO!" banner any more: the goal step already told the player where to go, and a
-        // banner on top of that is one more thing between them and the maze.
         if (_gm != null) _gm.OnTutorialComplete();
     }
 }

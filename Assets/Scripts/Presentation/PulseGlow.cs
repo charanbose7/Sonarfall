@@ -22,6 +22,9 @@ public class PulseGlow : MonoBehaviour
         _phase = Random.Range(0f, Mathf.PI * 2f);
     }
 
+    /// <summary>Re-tint without restarting the pulse (the earned sonar colours).</summary>
+    public void SetColor(Color color) => _rgb = color;
+
     private void Update()
     {
         if (_sr == null) return;

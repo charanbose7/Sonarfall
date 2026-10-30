@@ -48,6 +48,14 @@ public class PlayerController : MonoBehaviour
     public bool Moving => _estVel.sqrMagnitude > 0.4f;
 
     /// <summary>
+    /// World units per second added to the dot's own motion — an UNDERTOW current. Set by
+    /// GameManager every frame from the cell the dot is in; zero everywhere else. It goes through
+    /// the same collide-and-slide as a drag, so a current can pin you against a wall but can
+    /// never push you through one.
+    /// </summary>
+    public Vector2 ExternalPush { get; set; }
+
+    /// <summary>
     /// Where the dot sat at the START of the current frame. Together with its position now this
     /// gives the segment it travelled, which pickup tests sweep against. A drag applies its finger
     /// delta directly — there is no speed cap — so a fast flick can cross a whole cell in one
@@ -68,6 +76,29 @@ public class PlayerController : MonoBehaviour
         _castFilter.useTriggers = false;
     }
 
+    /// <summary>
+    /// Re-tint the dot, its halo and its trail — the sonar colour the player picked from the ones
+    /// earned by clearing sectors.
+    /// </summary>
+    public void SetColour(Color c)
+    {
+        if (_glow != null)
+        {
+            var sr = _glow.GetComponent<SpriteRenderer>();
+            if (sr != null) sr.color = c;
+        }
+        var halo = GetComponentInChildren<PulseGlow>(true);
+        if (halo != null) halo.SetColor(c);
+        if (_trail != null)
+        {
+            var grad = new Gradient();
+            grad.SetKeys(
+                new[] { new GradientColorKey(c, 0f), new GradientColorKey(c, 1f) },
+                new[] { new GradientAlphaKey(0.55f, 0f), new GradientAlphaKey(0f, 1f) });
+            _trail.colorGradient = grad;
+        }
+    }
+
     public void PlaceAt(Vector2 worldPos)
     {
         _rb.position = worldPos;
@@ -75,6 +106,7 @@ public class PlayerController : MonoBehaviour
         PrevPosition = worldPos;   // a respawn must not read as a sweep from the old cell
         _rb.linearVelocity = Vector2.zero;
         _estVel = Vector2.zero;
+        ExternalPush = Vector2.zero;
         _dragging = false;
         _gestureOnUI = false;
         _pathPos.Clear(); _pathTime.Clear();
@@ -161,6 +193,8 @@ public class PlayerController : MonoBehaviour
                 _gestureOnUI = false;
             }
         }
+
+        moveDelta += ExternalPush * dt;
 
         // Apply movement with wall collision, and estimate velocity for juice/audio.
         Vector2 moved = MoveWithCollision(moveDelta);

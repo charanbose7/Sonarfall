@@ -16,6 +16,31 @@ public struct Difficulty
     public float exitMoveInterval;
     public int decoyCount;
     public float decoyFadeSpeed;   // how fast decoys blink — faster is harder to time a crossing
+
+    // ---- Sector rules (see GameConfig.RulesFor) ----
+    public LevelRule rules;
+    public int   hunterCount;
+    public float hunterSpeed;      // cells per second
+    public int   gateCount;
+    public float gatePeriod;       // seconds for one full open+closed cycle
+    public int   stillZones;
+    public int   currentCount;
+    public float currentSpeed;     // world units per second of push
+}
+
+/// <summary>
+/// The one new idea each sector after DRIFT adds. Flags, because past the first lap a level can
+/// carry two of them at once.
+/// </summary>
+[System.Flags]
+public enum LevelRule
+{
+    None       = 0,
+    Hunter     = 1,    // THE HOLLOW — something follows your pings
+    Gates      = 2,    // ECHO CORE  — passages open and shut on the core's beat
+    FastFade   = 4,    // LONG DARK  — echoes die almost as soon as they land
+    StillWater = 8,    // STILLWATER — patches where a ping shows nothing
+    Currents   = 16,   // UNDERTOW   — corridors that push you along
 }
 
 /// <summary>
@@ -91,26 +116,23 @@ public static class GameConfig
     public const int   RubberBandPings    = 2;     // ...quietly grant this many extra pings
     public const float PingBudgetScale    = 0.72f; // fraction of grid size handed out as reveals
 
-    // ---- Stars = lives ----
-    // Stars used to be a post-hoc rating of how many pings you had left. They are now a resource
-    // you spend during the level: three per level, one lost per decoy hit, one back for a bonus
-    // echo. Run out and the level is failed. This is what turns a decoy from "mild annoyance"
-    // into something worth actually avoiding.
-    public const int   StartStars         = 3;
-    public const int   MaxStars           = 3;     // the normal ceiling
-    public const int   DecoyStarCost      = 1;
-    public const float DecoyTimePenalty   = 2f;    // seconds burned off the clock per decoy hit
-    public const int   BonusOrbStars      = 1;
+    // ---- Hull = lives ----
+    // These were called stars, and in a puzzle game "stars" means a level rating — so players
+    // read the row as a score they were losing rather than as lives. They are HULL now: three
+    // plates per level, one cracked per hazard hit, one repaired by a bonus echo. Stars are
+    // back to meaning what everyone expects: the 0-3 grade you earn for a clear.
+    public const int   StartHull          = 3;
+    public const int   MaxHull            = 3;     // the normal ceiling
+    public const int   DecoyHullCost      = 1;
+    public const float DecoyTimePenalty   = 2f;    // seconds burned off the clock per hit
+    public const int   BonusOrbHull       = 1;
 
     /// <summary>
-    /// A bonus echo collected at FULL health grants a fourth, golden star instead of being wasted.
-    ///
-    /// Previously the orb simply did nothing if you were undamaged, which is the worst possible
-    /// shape for a variable reward — a prize that sometimes pays zero teaches players to ignore it.
-    /// Now finding one is always worth the detour, and clearing a level overcharged is its own
-    /// distinct outcome with its own praise and a brighter sting.
+    /// A bonus echo collected with the hull already full adds a fourth, gold REINFORCED plate
+    /// instead of being wasted. A reward that sometimes pays nothing trains players to ignore it.
+    /// The plate carries into the next level, so it is something worth protecting.
     /// </summary>
-    public const int   OverchargeStars    = 4;
+    public const int   ReinforcedHull     = 4;
 
     // ---- Loop timing ----
     // 45s was comfortable enough that testers were finishing with time to spare on levels the
@@ -184,7 +206,9 @@ public static class GameConfig
     public const int   LevelsPerSector    = 5;
     public static readonly string[] SectorNames =
         { "SHALLOWS", "THE DEEP", "DRIFT", "THE HOLLOW", "ECHO CORE",
-          "LONG DARK", "STILLWATER", "THE LATTICE" };
+          "LONG DARK", "STILLWATER", "UNDERTOW" };
+    // UNDERTOW was THE LATTICE: the one name with no water in it, and the sector whose new rule
+    // is a current — a lattice of currents is a stretch, an undertow is the thing itself.
     public static readonly Color[] SectorWallColors =
     {
         new Color(0.55f, 0.80f, 1.00f, 1f), // blue-white
@@ -242,6 +266,25 @@ public static class GameConfig
     /// </summary>
     public const float PingNudgeDelay = 5f;
 
+    // ---- Callouts (teach by doing) ----
+    // The old explainers were cards with an OK button that stayed locked for three seconds, and a
+    // first-time player sat through six of them before level 1 began. Now the game pauses only at
+    // the moment something new actually turns up, says one line about it, and any tap carries on.
+    // The guard is not a countdown: it only stops the same touch that was steering the dot from
+    // dismissing the line before it has been drawn.
+    public const float CalloutGuard        = 0.35f;
+    public const float DecoyCalloutRadius  = 2.4f;   // a decoy this close (and lit) is "met"
+    public const float GateCalloutRadius   = 2.6f;
+    public const float FastFadeCalloutLag  = 0.25f;  // after the first reveal has visibly died
+    public const float HudPulseSeconds     = 2.4f;
+
+    // ---- Exit beacon (sound as information) ----
+    // The exit ticks like a parking sensor: panned toward it, faster and brighter as you close in,
+    // so a player who has lost the picture can still steer by ear.
+    public const float BeaconIntervalFar   = 1.9f;
+    public const float BeaconIntervalNear  = 0.75f;
+    public const float BeaconRange         = 7f;     // world units over which it ramps
+
     // ---- Performance ----
     public const int   TargetFrameRate    = 60;
 
@@ -255,27 +298,35 @@ public static class GameConfig
     public static readonly Color DecoyRingColor  = new Color(1.0f, 0.22f, 0.22f, 1f); // red highlight outline
     public static readonly Color StreakColor     = new Color(1.0f, 0.6f, 0.15f, 1f); // flame
     public static readonly Color BonusOrbColor   = new Color(1.0f, 0.85f, 0.25f, 1f); // gold reward
+    public static readonly Color HunterColor     = new Color(1.0f, 0.18f, 0.32f, 1f); // crimson eyes
+    public static readonly Color GateColor       = new Color(0.55f, 0.95f, 1.0f, 1f); // ice-white bars
+    public static readonly Color StillHazeColor  = new Color(0.010f, 0.025f, 0.060f, 1f); // murk
+    public static readonly Color StillEdgeColor  = new Color(0.45f, 0.62f, 0.85f, 1f);
+    public static readonly Color CurrentColor    = new Color(0.55f, 0.90f, 0.95f, 1f);
 
-    // ---- Level-clear praise ----
-    // Replaces the star tally on the clear screen. Still keyed off stars remaining, so a clean
-    // run is acknowledged differently from a scrape — the player feels the difference without
-    // being shown a score they can't do anything with. Several per tier so the same word doesn't
-    // come up level after level and stop registering.
-    /// <summary>Only reachable by finding a bonus echo while already undamaged — it should feel
-    /// rarer and louder than a merely clean clear.</summary>
-    public static readonly string[] PraiseOvercharged = { "OVERCHARGED", "FULL SPECTRUM", "PEAK ECHO", "MAXIMUM" };
-    public static readonly string[] PraiseFlawless = { "FLAWLESS", "PERFECT", "UNTOUCHED", "MASTERFUL", "SUBLIME" };
-    public static readonly string[] PraiseGood     = { "FABULOUS", "AMAZING", "NICE ONE", "SHARP", "SUPERB", "SLICK" };
-    public static readonly string[] PraiseScraped  = { "PHEW!", "CLOSE ONE", "JUST MADE IT", "SURVIVED", "BARELY" };
+    // ---- Level grade ----
+    // Fourteen rotating praise words told the player nothing: "SLICK" and "SUPERB" were the same
+    // outcome, and there was no way to know what would have earned "FLAWLESS". A clear now earns
+    // up to three stars, one per stated rule, and the rules are printed under the stars every
+    // time so the player always knows what the missing one was for.
+    //
+    //   ★  EXIT          reach the exit
+    //   ★  NO DAMAGE     no hull plate cracked on the way
+    //   ★  ≤ N REVEALS   used no more than half the level's reveals
+    //
+    // Half the budget is the par because the budget is what the level is tuned around: a player
+    // who needs every reveal finished, one who needed half of them read the maze.
+    public static readonly string[] GradeWords = { "", "CLEARED", "SHARP", "PERFECT" };
+    public const float RevealParFraction = 0.5f;
 
-    /// <summary>A praise word for a clear that kept <paramref name="starsLeft"/> of its lives.</summary>
-    public static string PraiseFor(int starsLeft)
+    /// <summary>Most reveals a clear may spend and still earn the reveal star.</summary>
+    public static int RevealPar(int basePings) => Mathf.Max(2, Mathf.CeilToInt(basePings * RevealParFraction));
+
+    /// <summary>0..3. Exit is always earned on a clear; the other two are independent.</summary>
+    public static int GradeFor(bool cleared, bool noDamage, int revealsUsed, int par)
     {
-        string[] pool = starsLeft >= OverchargeStars ? PraiseOvercharged
-                      : starsLeft >= MaxStars ? PraiseFlawless
-                      : starsLeft >= 2        ? PraiseGood
-                                              : PraiseScraped;
-        return pool[Random.Range(0, pool.Length)];
+        if (!cleared) return 0;
+        return 1 + (noDamage ? 1 : 0) + (revealsUsed <= par ? 1 : 0);
     }
 
     // ---- Sector helpers ----
@@ -376,6 +427,14 @@ public static class GameConfig
     /// </summary>
     public static Difficulty GetDifficulty(int level, int failStreak)
     {
+        var d = GetBaseDifficulty(level, failStreak);
+        ApplyRules(ref d, RulesFor(level), level);
+        return d;
+    }
+
+    /// <summary>The level's tuning before any sector rule is applied.</summary>
+    private static Difficulty GetBaseDifficulty(int level, int failStreak)
+    {
         var d = new Difficulty();
 
         // How hard this level should FEEL, after the sector sawtooth. Everything that governs
@@ -447,4 +506,248 @@ public static class GameConfig
 
         return d;
     }
+
+    // =========================================================================================
+    //  Sector rules
+    // =========================================================================================
+    // A playtester cleared 34 levels in ten minutes with one fail: past DRIFT nothing new
+    // happened, the knobs just kept turning. Each sector from THE HOLLOW on now brings one rule
+    // the player has to think about differently, introduced alone on its own five levels and
+    // mixed back in afterwards so the earlier ideas don't simply vanish.
+
+    /// <summary>First sector (0-based) that carries a rule of its own — THE HOLLOW.</summary>
+    public const int FirstRuleSector = 3;
+
+    /// <summary>The rule each sector introduces, by 0-based sector index within a lap.</summary>
+    public static LevelRule SectorRule(int sectorInLap)
+    {
+        switch (sectorInLap)
+        {
+            case 3: return LevelRule.Hunter;
+            case 4: return LevelRule.Gates;
+            case 5: return LevelRule.FastFade;
+            case 6: return LevelRule.StillWater;
+            case 7: return LevelRule.Currents;
+            default: return LevelRule.None;
+        }
+    }
+
+    /// <summary>
+    /// Which rules a level carries. Deterministic in the level number, so a retry of level 27 is
+    /// the same kind of level with a new layout rather than a different game.
+    ///
+    ///   first lap  : a sector's own rule on all five of its levels, plus — once a later sector is
+    ///                reached — a one-in-four chance of ONE earlier rule returning (never on the
+    ///                sector opener, which is where the new rule is met on its own).
+    ///   later laps : every level draws one rule, and a second one a third of the time.
+    /// </summary>
+    public static LevelRule RulesFor(int level)
+    {
+        int sector = SectorIndex(level);
+        int lap = sector / SectorNames.Length;
+        int inLap = sector % SectorNames.Length;
+
+        if (lap == 0)
+        {
+            if (inLap < FirstRuleSector) return LevelRule.None;
+            LevelRule own = SectorRule(inLap);
+            if (inLap > FirstRuleSector && LevelInSector(level) > 1 && Hash01(level, 11) < 0.25f)
+            {
+                int pick = FirstRuleSector + Mathf.FloorToInt(Hash01(level, 23) * (inLap - FirstRuleSector));
+                own |= SectorRule(pick);
+            }
+            return own;
+        }
+
+        LevelRule r = SectorRule(inLap);
+        if (r == LevelRule.None)
+            r = SectorRule(FirstRuleSector + Mathf.FloorToInt(Hash01(level, 31) * 5f));
+        if (Hash01(level, 47) < 0.34f)
+            r |= SectorRule(FirstRuleSector + Mathf.FloorToInt(Hash01(level, 59) * 5f));
+        return r;
+    }
+
+    /// <summary>Stable pseudo-random 0..1 from (key, salt). No System.Random, no state.</summary>
+    public static float Hash01(int key, int salt)
+    {
+        unchecked
+        {
+            uint h = (uint)(key * 374761393 + salt * 668265263);
+            h = (h ^ (h >> 13)) * 1274126177u;
+            h ^= h >> 16;
+            return (h & 0xFFFFFF) / (float)0x1000000;
+        }
+    }
+
+    // ---- per-rule tuning ----
+    public const float HunterSpeedStart   = 0.85f;  // cells / second at its debut
+    public const float HunterSpeedEnd     = 1.2f;   // ...and deep in the run (player is ~1.2 u/s)
+    public const float HunterHitRadius    = 0.42f;  // fraction of a cell
+    public const int   HunterLairMinSteps = 6;      // spawns at least this far (by route) from you
+    public const float HunterTimeBonus    = 3f;     // detours cost time
+    public const float HunterGlowRadius   = 2.6f;   // eyes show faintly within this, lit or not
+    public const float HunterStunSeconds  = 1.4f;   // back in its lair, still, after a bite
+    public const float HunterGraceSeconds = 1.2f;   // no second bite while the first is landing
+
+    public const float GatePeriodStart    = 4.4f;   // seconds per open+shut cycle
+    public const float GatePeriodEnd      = 3.2f;
+    public const float GateOpenFraction   = 0.5f;
+    public const float GateTimeBonus      = 5f;     // waiting on a gate is the point, not a tax
+    public const float GateTelegraph      = 0.5f;   // seconds of flicker before a gate shuts
+    public const float GateIdleGlow       = 0.22f;  // a gate is never fully dark: the beat must be readable
+
+    public const float FastFadeScale      = 0.42f;  // LONG DARK: walls keep 42% of their linger
+    public const float FastFadeBandScale  = 0.8f;
+    public const int   FastFadePingBonus  = 1;
+
+    public const float StillZoneRadius    = 1.55f;  // world units (cells)
+    public const float StillTimeBonus     = 4f;
+    public const float StillLightRadius   = 0.95f;  // inside still water you see only this far
+
+    public const float CurrentSpeedStart  = 0.42f;  // world units / s — always slower than you
+    public const float CurrentSpeedEnd    = 0.62f;
+    public const int   CurrentMinRun      = 3;      // shortest straight corridor that gets one
+
+    /// <summary>Fill in the rule payload. Counts and speeds follow the level's place in its sector,
+    /// so a sector opener meets its rule gently and the finale meets it hard.</summary>
+    private static void ApplyRules(ref Difficulty d, LevelRule rules, int level)
+    {
+        d.rules = rules;
+        if (rules == LevelRule.None) return;
+
+        float s = LevelsPerSector > 1 ? (LevelInSector(level) - 1) / (float)(LevelsPerSector - 1) : 1f;
+        float deep = Mathf.Clamp01((level - 16) / 60f);    // keeps tightening on later laps
+
+        if ((rules & LevelRule.Hunter) != 0)
+        {
+            d.hunterCount = level >= 60 && s > 0.6f ? 2 : 1;
+            d.hunterSpeed = Mathf.Lerp(HunterSpeedStart, HunterSpeedEnd, Mathf.Max(s * 0.6f, deep));
+            d.timeLimit += HunterTimeBonus;
+        }
+        if ((rules & LevelRule.Gates) != 0)
+        {
+            d.gateCount  = 2 + Mathf.RoundToInt(s * 2f);  // 2..4 on the route
+            d.gatePeriod = Mathf.Lerp(GatePeriodStart, GatePeriodEnd, Mathf.Max(s * 0.7f, deep));
+            d.timeLimit += GateTimeBonus;
+        }
+        if ((rules & LevelRule.FastFade) != 0)
+        {
+            d.fade *= FastFadeScale;
+            d.band *= FastFadeBandScale;
+            d.pings += FastFadePingBonus;
+        }
+        if ((rules & LevelRule.StillWater) != 0)
+        {
+            d.stillZones = 1 + Mathf.RoundToInt(s * 1.5f);   // 1..3 (the shader holds 4)
+            d.timeLimit += StillTimeBonus;
+        }
+        if ((rules & LevelRule.Currents) != 0)
+        {
+            d.currentCount = 2 + Mathf.RoundToInt(s * 2f);
+            d.currentSpeed = Mathf.Lerp(CurrentSpeedStart, CurrentSpeedEnd, Mathf.Max(s, deep));
+        }
+
+        // The rule IS the difficulty in these sectors. Stacking the full decoy count on top of a
+        // hunter or a gate turns a new idea into noise, so make room for it.
+        if (d.decoyCount > 2) d.decoyCount -= 1;
+    }
+
+    /// <summary>The level's rules as one caption line, for the level select. Empty if none.</summary>
+    public static string RuleSummary(LevelRule r)
+    {
+        if (r == LevelRule.None) return "";
+        var sb = new System.Text.StringBuilder();
+        if ((r & LevelRule.Hunter) != 0)     Append(sb, "HUNTER");
+        if ((r & LevelRule.Gates) != 0)      Append(sb, "GATES");
+        if ((r & LevelRule.FastFade) != 0)   Append(sb, "FAST FADE");
+        if ((r & LevelRule.StillWater) != 0) Append(sb, "STILL WATER");
+        if ((r & LevelRule.Currents) != 0)   Append(sb, "CURRENTS");
+        return sb.ToString();
+    }
+
+    private static void Append(System.Text.StringBuilder sb, string t)
+    {
+        if (sb.Length > 0) sb.Append("  +  ");
+        sb.Append(t);
+    }
+
+    // =========================================================================================
+    //  Descent — the endless mode
+    // =========================================================================================
+    // The trailer promises endless mazes; the ladder is technically unbounded, but past level 40 it
+    // is the same eight sectors with numerals on. Descent is the honest version: one hull for the
+    // whole dive, maze after maze, deeper until something breaks it. Depth is the score.
+    public const int   DescentMetresPerMaze = 100;
+    public const int   DescentStartLevel    = 4;   // skips the tutorial-gentle opening mazes
+    public const int   DescentLevelStep     = 2;   // every maze dives this many "levels" deeper
+    public const int   DescentRuleFromMaze  = 3;   // rules start mixing in from this maze
+    public const int   DescentRepairEvery   = 5;   // one hull plate back every N mazes survived
+    public const int   DescentUnlockLevel   = LevelsPerSector + 1;  // clear sector 1 first
+    /// <summary>
+    /// Running out of time in Descent costs a plate and re-rolls the maze at the same depth rather
+    /// than ending the dive. The hull is the one thing a dive spends, so it should be the one thing
+    /// that ends it — a single slow maze wiping out a 2,000 m run would read as a cheap shot.
+    /// </summary>
+    public const int   DescentTimeoutCost   = 1;
+
+    /// <summary>The ladder level whose tuning Descent maze <paramref name="index"/> (0-based) uses.</summary>
+    public static int DescentLevel(int index) => DescentStartLevel + index * DescentLevelStep;
+
+    /// <summary>"1,400 m" — always with a comma, whatever the phone's locale, so a shared result
+    /// reads the same for everyone who sees it.</summary>
+    public static string DepthText(int mazesCleared) =>
+        (mazesCleared * DescentMetresPerMaze).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + " m";
+
+    /// <summary>Rules for a Descent maze: none for the first few, then one, later sometimes two.</summary>
+    public static LevelRule DescentRules(int index, int seed)
+    {
+        if (index < DescentRuleFromMaze) return LevelRule.None;
+        LevelRule r = SectorRule(FirstRuleSector + Mathf.FloorToInt(Hash01(seed + index, 71) * 5f));
+        if (index >= 8 && Hash01(seed + index, 83) < 0.4f)
+            r |= SectorRule(FirstRuleSector + Mathf.FloorToInt(Hash01(seed + index, 97) * 5f));
+        return r;
+    }
+
+    /// <summary>
+    /// Difficulty for a Descent maze: the ladder's tuning for the equivalent level, with Descent's
+    /// own rule draw in place of the ladder's sector rule — the dive mixes every idea rather than
+    /// marching through them in sector order.
+    /// </summary>
+    public static Difficulty GetDescentDifficulty(int index, int seed)
+    {
+        int lvl = DescentLevel(index);
+        var d = GetBaseDifficulty(lvl, 0);
+        ApplyRules(ref d, DescentRules(index, seed), lvl);
+        return d;
+    }
+
+    // =========================================================================================
+    //  Accessibility / presentation settings
+    // =========================================================================================
+    /// <summary>Glow multipliers for the BRIGHTNESS setting. Outdoors the default is close to
+    /// invisible on a phone; the top step is deliberately loud.</summary>
+    public static readonly float[] BrightnessGain  = { 1.0f, 1.35f, 1.8f };
+    public static readonly string[] BrightnessName = { "NORMAL", "BRIGHT", "MAX" };
+
+    /// <summary>
+    /// Sonar colours for the player dot. Index 0 is the default; the rest are earned one per sector
+    /// cleared — the reward for finishing a sector is a colour named after the place you got through.
+    /// </summary>
+    public static Color SonarColour(int index)
+    {
+        if (index <= 0) return PlayerColor;
+        return Color.Lerp(SectorWallColors[(index - 1) % SectorWallColors.Length], Color.white, 0.15f);
+    }
+    public static string SonarColourName(int index) =>
+        index <= 0 ? "STANDARD" : SectorNames[(index - 1) % SectorNames.Length];
+
+    // =========================================================================================
+    //  Sharing
+    // =========================================================================================
+    /// <summary>Where a shared result points. Swap for a short link once one exists.</summary>
+    public const string StoreUrl = "https://play.google.com/store/apps/details?id=com.vortexforgestudios.sonarfall";
+
+    /// <summary>Daily #1 is 1 Sep 2026 — UTC day number 20697.</summary>
+    public const int DailyEpochDay = 20697;
 }
+

@@ -37,6 +37,266 @@ public static class VisualUtils
     public static Sprite PingStar(int size = 128) => Cached("PingStar" + size, () => BuildPingStar(size));
     public static Sprite SonarIcon(int size = 128) => Cached("SonarIcon" + size, () => BuildSonarIcon(size));
 
+    // ---- Object silhouettes ----
+    // Colour alone could not carry the game's objects. With deuteranopia the orange decoy and the
+    // green exit both land on the same khaki; with protanopia the decoy reads as the gold bonus
+    // echo — the thing that costs a hull plate looks like the thing that gives one back. Every
+    // object now has its own outline and its own motion, so colour is a second cue, never the only one.
+    public static Sprite HullPlate(int size = 128) => Cached("HullPlate" + size, () => BuildHullPlate(size));
+    public static Sprite Lure(int size = 128) => Cached("Lure" + size, () => BuildLure(size));
+    public static Sprite Jaws(int size = 256) => Cached("Jaws" + size, () => BuildJaws(size));
+    public static Sprite DashedRing(int size = 256, int dashes = 6) => Cached("DashedRing" + size + "," + dashes, () => BuildDashedRing(size, dashes));
+    public static Sprite Crystal(int size = 128) => Cached("Crystal" + size, () => BuildCrystal(size));
+    public static Sprite HunterEyes(int size = 128) => Cached("HunterEyes" + size, () => BuildHunterEyes(size));
+    public static Sprite Chevron(int size = 64) => Cached("Chevron" + size, () => BuildChevron(size));
+    public static Sprite Pixel() => Cached("Pixel", BuildPixel);
+    public static Sprite SoftDisc(int size = 128) => Cached("SoftDisc" + size, () => BuildSoftDisc(size));
+    public static Sprite DepthGradient() => Cached("DepthGradient", BuildDepthGradient);
+
+    /// <summary>Shared tail for every builder below: upload, drop the CPU copy, wrap in a sprite.</summary>
+    private static Sprite Finish(Texture2D tex, Color[] px, int size)
+    {
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply(false, true);
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+    }
+
+    /// <summary>
+    /// One hull plate: a hexagonal armour panel with a bright rim. Replaced the star row, which
+    /// players read as a score they were losing. Nothing else in the game is a hexagon, so it reads
+    /// as "a part of you" rather than as a pickup or a rating.
+    /// </summary>
+    private static Sprite BuildHullPlate(int size)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float ax = Mathf.Abs((x - c) / c), ay = Mathf.Abs((y - c) / c);
+            // Flat-topped hexagon: inradius 0.80 on the vertical, vertices left and right.
+            float d = Mathf.Max(ax * 0.866f + ay * 0.5f, ay) - 0.80f;   // < 0 inside
+            float body = Mathf.Clamp01(-d * 40f + 0.5f);
+            float rim  = Mathf.Clamp01(1f - Mathf.Abs(d + 0.07f) / 0.06f);
+            // A single seam across the middle: the detail that makes it a panel, not a gem.
+            float seam = ay < 0.035f && d < -0.12f ? 0.35f : 0f;
+            float a = Mathf.Max(body * 0.50f, Mathf.Max(rim, seam * body));
+            px[y * size + x] = new Color(1f, 1f, 1f, a);
+        }
+        return Finish(tex, px, size);
+    }
+
+    /// <summary>
+    /// The decoy, redrawn as an anglerfish's lure: a lit bulb hanging from a curved stalk. The
+    /// sector names were already all ocean and the decoys were already bait — a light that looks
+    /// like the way out — so this is what they always were. The bulb sits on the sprite centre,
+    /// which is where the hazard actually is; the stalk trails up and over it.
+    /// </summary>
+    private static Sprite BuildLure(int size)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        // Stalk: a quarter-ellipse from the bulb's crown sweeping up and back to the top-left.
+        Vector2 arcC = new Vector2(-0.46f, 0.30f);
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float r = Mathf.Sqrt(u * u + v * v);
+
+            float glow = Mathf.Clamp01(1f - r / 0.62f); glow *= glow;          // the bulb's light
+            float core = Mathf.Clamp01((0.20f - r) / 0.05f);                     // hard lit centre
+
+            float stalk = 0f;
+            if (v > 0.18f && u < 0.06f && u > -0.95f)
+            {
+                float du = (u - arcC.x) / 0.48f, dv = (v - arcC.y) / 0.62f;      // ellipse through the crown
+                float e = Mathf.Abs(Mathf.Sqrt(du * du + dv * dv) - 1f);
+                stalk = Mathf.Clamp01(1f - e / 0.07f) * Mathf.Clamp01((0.98f - v) * 6f) * 0.75f;
+            }
+            px[y * size + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(Mathf.Max(Mathf.Max(glow * 0.85f, core), stalk)));
+        }
+        return Finish(tex, px, size);
+    }
+
+    /// <summary>
+    /// A ring of inward-pointing teeth: the anglerfish behind the lure, shown only when a ping
+    /// sweeps over a decoy. It replaced a plain circle that looked exactly like the exit marker.
+    /// </summary>
+    private static Sprite BuildJaws(int size)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        const int teeth = 13;
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float r = Mathf.Sqrt(u * u + v * v);
+            float ang = Mathf.Atan2(v, u) / (2f * Mathf.PI) + 0.5f;            // 0..1 round the ring
+            float f = ang * teeth - Mathf.Floor(ang * teeth);
+            float tooth = 1f - Mathf.Abs(f - 0.5f) * 2f;                        // 1 mid-tooth, 0 between
+            float tip = 0.88f - 0.24f * tooth;                                  // teeth point inward
+            float inTooth = (r < 0.88f && r > tip) ? Mathf.Clamp01((r - tip) * 30f) : 0f;
+            float gum = Mathf.Clamp01(1f - Mathf.Abs(r - 0.90f) / 0.035f);
+            px[y * size + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(Mathf.Max(inTooth, gum)));
+        }
+        return Finish(tex, px, size);
+    }
+
+    /// <summary>The exit's turning reticle: a ring broken into dashes, so it reads as a target
+    /// even when its colour does not.</summary>
+    private static Sprite BuildDashedRing(int size, int dashes)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float r = Mathf.Sqrt(u * u + v * v);
+            float band = Mathf.Clamp01(1f - Mathf.Abs(r - 0.84f) / 0.075f);
+            float ang = Mathf.Atan2(v, u) / (2f * Mathf.PI) + 0.5f;
+            float f = ang * dashes - Mathf.Floor(ang * dashes);
+            float dash = Mathf.Clamp01((0.32f - Mathf.Abs(f - 0.5f)) * 18f);  // ~64% filled
+            px[y * size + x] = new Color(1f, 1f, 1f, band * band * dash);
+        }
+        return Finish(tex, px, size);
+    }
+
+    /// <summary>
+    /// The bonus echo as a cut crystal: a tall diamond with a bright rim and two facet lines. The
+    /// only object with straight edges and corners, and it spins, where the lure sways.
+    /// </summary>
+    private static Sprite BuildCrystal(int size)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float d = Mathf.Abs(u) / 0.58f + Mathf.Abs(v) / 0.96f - 1f;         // < 0 inside
+            float body = Mathf.Clamp01(-d * 30f + 0.5f);
+            float rim = Mathf.Clamp01(1f - Mathf.Abs(d + 0.05f) / 0.07f);
+            float facet = (Mathf.Abs(u) < 0.03f || Mathf.Abs(v - 0.18f) < 0.025f) ? 0.85f : 0f;
+            float a = Mathf.Max(body * 0.45f, Mathf.Max(rim, facet * body));
+            px[y * size + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(a));
+        }
+        return Finish(tex, px, size);
+    }
+
+    /// <summary>
+    /// The hunter: two slanted eyes and nothing else. Seen from above, facing +X — the renderer is
+    /// rotated to its heading. A pair of eyes is the one shape nobody mistakes for a light to chase.
+    /// </summary>
+    private static Sprite BuildHunterEyes(int size)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float a = 0f;
+            for (int side = -1; side <= 1; side += 2)
+            {
+                // Each eye an almond, angled inward toward the snout.
+                float ex = u - 0.22f, ey = v - side * 0.30f;
+                float cs = Mathf.Cos(side * 0.42f), sn = Mathf.Sin(side * 0.42f);
+                float rx = ex * cs + ey * sn, ry = -ex * sn + ey * cs;
+                float e = (rx * rx) / (0.20f * 0.20f) + (ry * ry) / (0.075f * 0.075f);
+                a = Mathf.Max(a, Mathf.Clamp01((1f - e) * 3f));
+            }
+            float r = Mathf.Sqrt(u * u + v * v);
+            float halo = Mathf.Clamp01(1f - r / 0.95f); halo = halo * halo * 0.22f;
+            px[y * size + x] = new Color(1f, 1f, 1f, Mathf.Max(a, halo));
+        }
+        return Finish(tex, px, size);
+    }
+
+    /// <summary>A single "&gt;" pointing +X, for the flow of a current.</summary>
+    private static Sprite BuildChevron(int size)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var px = new Color[size * size];
+        Vector2 a = new Vector2(0.18f, 0.86f) * size, b = new Vector2(0.70f, 0.5f) * size, d = new Vector2(0.18f, 0.14f) * size;
+        float th = size * 0.13f;
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            var p = new Vector2(x + 0.5f, y + 0.5f);
+            float dist = Mathf.Min(DistToSegment(p, a, b), DistToSegment(p, b, d));
+            px[y * size + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(th * 0.5f - dist + 0.5f));
+        }
+        return Finish(tex, px, size);
+    }
+
+    /// <summary>Solid white, one world unit square at scale 1 — gate bars are scaled from it.</summary>
+    private static Sprite BuildPixel()
+    {
+        const int size = 8;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var px = new Color[size * size];
+        for (int i = 0; i < px.Length; i++) px[i] = Color.white;
+        return Finish(tex, px, size);
+    }
+
+    /// <summary>Flat disc with a soft rim — the murk of a still-water patch.</summary>
+    private static Sprite BuildSoftDisc(int size)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float u = (x - c) / c, v = (y - c) / c;
+            float r = Mathf.Sqrt(u * u + v * v);
+            px[y * size + x] = new Color(1f, 1f, 1f, 1f - Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((r - 0.72f) / 0.28f)));
+        }
+        return Finish(tex, px, size);
+    }
+
+    /// <summary>
+    /// The water column behind the maze: faint blue-green light from the surface at the top,
+    /// falling to black at the bottom. Tall and thin — it is only ever stretched, never read.
+    /// The backdrop used to be a starfield, which argued with every sector name in the game.
+    /// </summary>
+    private static Sprite BuildDepthGradient()
+    {
+        const int w = 4, h = 256;
+        var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
+        var px = new Color[w * h];
+        var top = new Color(0.030f, 0.085f, 0.120f, 1f);
+        var mid = new Color(0.012f, 0.032f, 0.060f, 1f);
+        var bot = new Color(0.004f, 0.008f, 0.020f, 1f);
+        for (int y = 0; y < h; y++)
+        {
+            float t = y / (float)(h - 1);                    // 0 bottom .. 1 top
+            Color col = t > 0.55f ? Color.Lerp(mid, top, (t - 0.55f) / 0.45f)
+                                  : Color.Lerp(bot, mid, Easing.InOutSine(t / 0.55f));
+            for (int x = 0; x < w; x++) px[y * w + x] = col;
+        }
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply(false, true);
+        // One world unit TALL at scale 1 (and w/h wide); the caller stretches it to the view.
+        return Sprite.Create(tex, new Rect(0, 0, w, h), new Vector2(0.5f, 0.5f), h);
+    }
+
+    /// <summary>World width of <see cref="DepthGradient"/> at scale 1, for stretching it.</summary>
+    public const float DepthGradientWidth = 4f / 256f;
+
     /// <summary>Soft radial glow: bright at the center, fading to transparent at the edge.</summary>
     private static Sprite BuildRadialGlow(int size = 128)
     {

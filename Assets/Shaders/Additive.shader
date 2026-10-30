@@ -30,6 +30,7 @@ Shader "Sonarfall/Additive"
             sampler2D _MainTex;
             float4 _MainTex_ST;
             fixed4 _Color;
+            float _SonarGain;   // BRIGHTNESS setting, shared with the walls; floored at 1
 
             struct appdata
             {
@@ -58,7 +59,8 @@ Shader "Sonarfall/Additive"
                 fixed4 c = tex2D(_MainTex, i.uv) * _Color * i.color;
                 // Premultiply so fully transparent texels contribute nothing to
                 // the additive blend (avoids square halos around round sprites).
-                return fixed4(c.rgb * c.a, c.a);
+                float gain = max(_SonarGain, 1.0);
+                return fixed4(c.rgb * c.a * gain, c.a);
             }
             ENDCG
         }
