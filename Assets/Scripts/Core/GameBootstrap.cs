@@ -17,7 +17,12 @@ public class GameBootstrap : MonoBehaviour
         // ---- Platform / performance ----
         Application.targetFrameRate = GameConfig.TargetFrameRate;
         QualitySettings.vSyncCount = 0;                 // let targetFrameRate govern the cadence
-        Screen.orientation = ScreenOrientation.Portrait; // mobile: lock portrait
+#if !UNITY_WEBGL || UNITY_EDITOR
+        // Mobile: lock portrait. Not on WebGL, where this calls screen.orientation.lock() — which
+        // desktop browsers reject with a console error. The page itself is a 9:16 frame
+        // (Assets/WebGLTemplates/Sonarfall), so there is nothing to lock.
+        Screen.orientation = ScreenOrientation.Portrait;
+#endif
         Screen.sleepTimeout = SleepTimeout.NeverSleep;
     }
 
