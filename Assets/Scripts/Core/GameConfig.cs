@@ -730,14 +730,32 @@ public static class GameConfig
     public static readonly string[] BrightnessName = { "NORMAL", "BRIGHT", "MAX" };
 
     /// <summary>
-    /// Sonar colours for the player dot. Index 0 is the default; the rest are earned one per sector
-    /// cleared — the reward for finishing a sector is a colour named after the place you got through.
+    /// Sonar colours: the dot, the ping ring and the walls a ping reveals. Index 0 (STANDARD) keeps
+    /// each sector's own palette; the rest are earned one per sector cleared — the reward for
+    /// finishing a sector is a colour named after the place you got through.
     /// </summary>
     public static Color SonarColour(int index)
     {
         if (index <= 0) return PlayerColor;
-        return Color.Lerp(SectorWallColors[(index - 1) % SectorWallColors.Length], Color.white, 0.15f);
+        return EarnedSonarColours[(index - 1) % EarnedSonarColours.Length];
     }
+
+    /// <summary>
+    /// One per sector, in sector order, spread round the hue wheel. Deliberately NOT the sector
+    /// wall tints: several of those are near neighbours (SHALLOWS and LONG DARK are both pale
+    /// blue), which made two "different" rewards look the same on the next ping.
+    /// </summary>
+    private static readonly Color[] EarnedSonarColours =
+    {
+        new Color(0.35f, 0.75f, 1.00f, 1f), // SHALLOWS   — sky
+        new Color(0.20f, 1.00f, 0.78f, 1f), // THE DEEP   — aqua
+        new Color(0.76f, 0.50f, 1.00f, 1f), // DRIFT      — violet
+        new Color(1.00f, 0.62f, 0.25f, 1f), // THE HOLLOW — amber
+        new Color(1.00f, 0.38f, 0.58f, 1f), // ECHO CORE  — rose
+        new Color(0.46f, 0.46f, 1.00f, 1f), // LONG DARK  — indigo
+        new Color(0.68f, 1.00f, 0.42f, 1f), // STILLWATER — lime
+        new Color(1.00f, 0.92f, 0.55f, 1f), // UNDERTOW   — sand
+    };
     public static string SonarColourName(int index) =>
         index <= 0 ? "STANDARD" : SectorNames[(index - 1) % SectorNames.Length];
 

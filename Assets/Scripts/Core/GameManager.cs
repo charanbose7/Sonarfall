@@ -223,6 +223,23 @@ public partial class GameManager : MonoBehaviour
 
     private Renderer[] _playerRenderers;
 
+    private Color _sectorColor = GameConfig.WallGlowColor;
+
+    /// <summary>
+    /// Tint the ping ring and every revealed wall. STANDARD keeps each sector's own palette; any
+    /// earned sonar colour replaces it everywhere the sonar draws.
+    ///
+    /// The setting used to recolour only the dot, which is a few pixels of a dark screen: players
+    /// switched colours mid-level and saw nothing change. The ping and the walls it lights ARE the
+    /// sonar, so that is where the reward has to show. Applied immediately, mid-level included.
+    /// </summary>
+    private void ApplyWorldPalette()
+    {
+        Color c = SaveData.SonarColour > 0 ? GameConfig.SonarColour(SaveData.SonarColour) : _sectorColor;
+        _wallCtrl.SetGlowColor(c);
+        _sonar.SetRingColor(c);
+    }
+
     /// <summary>Show the main menu. Nothing runs until the player presses PLAY or DAILY.</summary>
     public void StartGame()
     {
@@ -237,7 +254,7 @@ public partial class GameManager : MonoBehaviour
         _ui.OnResetLevel = ResetLevel;
         _ui.OnHome = GoHome;
         _ui.OnLevelChosen = level => AfterFirstRunPrompt(() => BeginRunAtLevel(level));
-        _ui.OnSonarColour = c => _player.SetColour(c);
+        _ui.OnSonarColour = c => { _player.SetColour(c); ApplyWorldPalette(); };
         _ui.Audio = _audio;     // lets the UI layer make noise without reaching for a singleton
 
         ReturnToMenu();
@@ -426,8 +443,8 @@ public partial class GameManager : MonoBehaviour
         Color sectorColor = _isDescent
             ? GameConfig.SectorWallColors[(_descentIndex / GameConfig.LevelsPerSector) % GameConfig.SectorWallColors.Length]
             : GameConfig.SectorWallColor(level);
-        _wallCtrl.SetGlowColor(sectorColor);
-        _sonar.SetRingColor(sectorColor);
+        _sectorColor = sectorColor;
+        ApplyWorldPalette();
 
         _wallCtrl.Build(_maze);
         _sonar.SetWalls(_maze.walls);
