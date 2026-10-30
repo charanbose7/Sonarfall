@@ -139,6 +139,26 @@ public static class GameConfig
     // curve considered hard. The clock is the pressure; it needs to bite.
     public const float LevelTimeLimit     = 34f;   // <=0 disables the fail timer
     public const float CelebrationTime    = 1.5f;  // auto-advance delay after a clear
+
+    // ---- The clock, sector by sector ----
+    // A flat 34s stopped mattering after the first sector: a recorded run cleared 10 of 12 levels
+    // with 24-31s left, and both of its fails were hull damage, never time. Drag movement is fast
+    // (that run covered ~60-cell routes in under ten seconds), so the clock was never limiting the
+    // moving — only the reading and deciding, and it gave far too much of that. Each sector now
+    // takes a share of the base clock away. SHALLOWS keeps all of it: it is where people learn.
+    // Tune here; one entry per sector of the first lap, the last entry holds from then on.
+    public static readonly float[] SectorClock = { 1.00f, 0.86f, 0.76f, 0.70f, 0.66f, 0.64f, 0.64f, 0.64f };
+
+    /// <summary>The base clock never drops below this, whatever the sector and the deep squeeze
+    /// compound to — rule bonuses still go on top.</summary>
+    public const float MinTimeLimit       = 22f;
+
+    /// <summary>Extra clock after RubberBandFails straight fails on one level, alongside the
+    /// extra reveals: a tighter clock must not become a wall.</summary>
+    public const float RubberBandTimeScale = 1.2f;
+
+    public static float SectorClockScale(int level) =>
+        SectorClock[Mathf.Min(SectorIndex(level), SectorClock.Length - 1)];
     public const float HitstopTime        = 0.15f; // freeze on exit reached
 
     // ---- Twists (introduced as you climb) ----
@@ -491,6 +511,11 @@ public static class GameConfig
             float sizeBonus = Mathf.Max(0f, (d.mazeSize - MaxMazeSize) * SecondsPerExtraRow);
             d.timeLimit = (LevelTimeLimit + sizeBonus) * Mathf.Lerp(1f, DeepTimeSqueeze, deepT);
         }
+        // Per-sector tightening, floored, and loosened again for a player who keeps failing the
+        // same level. Applied to the base clock only: the sector rules add their own seconds on
+        // top (ApplyRules), because a gate or a hunter costs time that skill can't buy back.
+        d.timeLimit = Mathf.Max(MinTimeLimit, d.timeLimit * SectorClockScale(level));
+        if (failStreak >= RubberBandFails) d.timeLimit *= RubberBandTimeScale;
 
         // ---- Twists ----
         // Whether a twist EXISTS keys off the real level; how much of it there is follows the
@@ -608,6 +633,7 @@ public static class GameConfig
     public const float CurrentSpeedStart  = 0.42f;  // world units / s — always slower than you
     public const float CurrentSpeedEnd    = 0.62f;
     public const int   CurrentMinRun      = 3;      // shortest straight corridor that gets one
+    public const float CurrentTimeBonus   = 3f;     // swimming upstream costs time skill can't buy back
 
     /// <summary>Fill in the rule payload. Counts and speeds follow the level's place in its sector,
     /// so a sector opener meets its rule gently and the finale meets it hard.</summary>
@@ -646,6 +672,7 @@ public static class GameConfig
         {
             d.currentCount = 2 + Mathf.RoundToInt(s * 2f);
             d.currentSpeed = Mathf.Lerp(CurrentSpeedStart, CurrentSpeedEnd, Mathf.Max(s, deep));
+            d.timeLimit += CurrentTimeBonus;
         }
 
         // The rule IS the difficulty in these sectors. Stacking the full decoy count on top of a
