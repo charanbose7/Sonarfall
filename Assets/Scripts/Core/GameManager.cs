@@ -1520,6 +1520,7 @@ public partial class GameManager : MonoBehaviour
 
         _failStreak = 0;
         BuildLevel(_level);
+        SetGameplayVisuals(true);           // a reset from the clear card must bring the glows back
         _ui.ShowBanner("LEVEL " + _level + "\nRESET", UIManager.Accent, 0.9f);
 
         yield return new WaitForSecondsRealtime(0.12f);   // hold the black a beat so it registers
