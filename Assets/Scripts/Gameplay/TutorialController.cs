@@ -42,6 +42,11 @@ public class TutorialController : MonoBehaviour
     private Vector2 _lastPlayerPos;
     private bool _running;
 
+    // Prompt layout, in canvas units up from the bottom edge (see BuildUI).
+    private const float PromptTitleY = 370f;
+    private const float PromptSubY   = 290f;
+    private const float FingerY      = 160f;
+
     /// <summary>How long to let the first reveal play before pointing at the exit.</summary>
     private const float LookSeconds = 1.3f;
 
@@ -101,10 +106,17 @@ public class TutorialController : MonoBehaviour
 
         // Sizes up ~20% and the subtitle nearly opaque: at 34pt / 0.8 alpha over a lit maze the
         // second line was the thing testers said they could not read at all.
-        _title = MakeText(titleFont, "TutTitle", new Vector2(0, 300), 76, "DRAG TO MOVE");
+        //
+        // Placed BELOW the maze, measured up from the bottom edge, not across its middle. Centred
+        // a little above mid-screen, the prompt ran straight through the exit whenever the exit
+        // spawned top-right — which on the tutorial layout is always. The camera keeps the maze
+        // inside the band between the HUD and the bottom bar (UIManager.GetPlayfieldInsets), and
+        // on level 1's 6x6 grid its bottom edge measures 1444px of 1920; the title starts at
+        // ~1500. The mimed finger sits lower still, in the thumb zone, where a real thumb goes.
+        _title = MakeText(titleFont, "TutTitle", new Vector2(0, PromptTitleY), 76, "DRAG TO MOVE");
         _title.color = new Color(0.85f, 0.96f, 1f, 1f);
         _title.characterSpacing = 8f;          // matches the spaced caps used everywhere else
-        _sub = MakeText(bodyFont, "TutSub", new Vector2(0, 200), 42, "slide your finger anywhere");
+        _sub = MakeText(bodyFont, "TutSub", new Vector2(0, PromptSubY), 42, "slide your finger anywhere");
         _sub.color = new Color(0.88f, 0.94f, 1f, 0.97f);
 
         // The mimed finger: a soft dot plus an expanding ripple for taps.
@@ -115,7 +127,7 @@ public class TutorialController : MonoBehaviour
         _fingerRipple.raycastTarget = false;
         _fingerRipple.color = new Color(1f, 1f, 1f, 0f);
         var rrt = _fingerRipple.rectTransform;
-        rrt.anchorMin = rrt.anchorMax = new Vector2(0.5f, 0.5f); rrt.pivot = new Vector2(0.5f, 0.5f);
+        rrt.anchorMin = rrt.anchorMax = new Vector2(0.5f, 0f); rrt.pivot = new Vector2(0.5f, 0.5f);
         rrt.sizeDelta = new Vector2(190, 190);
 
         var fingerGO = new GameObject("Finger");
@@ -125,7 +137,7 @@ public class TutorialController : MonoBehaviour
         _finger.raycastTarget = false;
         _finger.color = new Color(1f, 1f, 1f, 0.85f);
         var frt = _finger.rectTransform;
-        frt.anchorMin = frt.anchorMax = new Vector2(0.5f, 0.5f); frt.pivot = new Vector2(0.5f, 0.5f);
+        frt.anchorMin = frt.anchorMax = new Vector2(0.5f, 0f); frt.pivot = new Vector2(0.5f, 0.5f);
         frt.sizeDelta = new Vector2(86, 86);
     }
 
@@ -139,7 +151,7 @@ public class TutorialController : MonoBehaviour
         t.textWrappingMode = TextWrappingModes.NoWrap;
         t.overflowMode = TextOverflowModes.Overflow;
         var rt = t.rectTransform;
-        rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f); rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0f); rt.pivot = new Vector2(0.5f, 0.5f);
         rt.anchoredPosition = pos; rt.sizeDelta = new Vector2(1000, 120);
         return t;
     }
@@ -168,7 +180,7 @@ public class TutorialController : MonoBehaviour
         float loop = Mathf.Repeat(_t, 2.2f) / 2.2f;
         float eased = Easing.InOutSine(Mathf.PingPong(loop * 2f, 1f));
         float x = Mathf.Lerp(-190f, 190f, eased);
-        _finger.rectTransform.anchoredPosition = new Vector2(x, -140f);
+        _finger.rectTransform.anchoredPosition = new Vector2(x, FingerY);
         _finger.color = new Color(1f, 1f, 1f, 0.9f);
         _fingerRipple.color = new Color(1f, 1f, 1f, 0f);
     }
@@ -177,12 +189,12 @@ public class TutorialController : MonoBehaviour
     private void AnimateTap()
     {
         float loop = Mathf.Repeat(_t, 1.5f) / 1.5f;
-        _finger.rectTransform.anchoredPosition = new Vector2(0f, -140f);
+        _finger.rectTransform.anchoredPosition = new Vector2(0f, FingerY);
         float press = loop < 0.2f ? 1f - loop / 0.2f * 0.25f : 0.75f + Mathf.Min(1f, (loop - 0.2f) / 0.3f) * 0.25f;
         _finger.rectTransform.localScale = Vector3.one * press;
 
         float rip = Mathf.Clamp01((loop - 0.15f) / 0.6f);
-        _fingerRipple.rectTransform.anchoredPosition = new Vector2(0f, -140f);
+        _fingerRipple.rectTransform.anchoredPosition = new Vector2(0f, FingerY);
         _fingerRipple.rectTransform.localScale = Vector3.one * Mathf.Lerp(0.4f, 1.8f, rip);
         _fingerRipple.color = new Color(1f, 1f, 1f, (1f - rip) * 0.7f * (loop > 0.15f ? 1f : 0f));
     }
