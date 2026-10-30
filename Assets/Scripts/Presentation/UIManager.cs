@@ -1897,10 +1897,15 @@ public partial class UIManager : MonoBehaviour
         // Created before the click handler so the handler can ask it whether this release is the
         // end of a diagnostic hold. uGUI fires onClick on every pointer-up over the button, hold or
         // not — without this check a tester running the self-test also flipped the setting off.
-        var hold = hapticBtn.gameObject.AddComponent<HoldToDiagnose>();
+        // The long-press diagnostics exist only in the Editor and Development builds; a release
+        // build ships plain toggles. Give testers a Development build to keep them.
+        HoldToDiagnose hold = null;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        hold = hapticBtn.gameObject.AddComponent<HoldToDiagnose>();
+#endif
         hapticBtn.onClick.AddListener(() =>
         {
-            if (hold.FiredThisPress) return;
+            if (hold != null && hold.FiredThisPress) return;
             SaveData.HapticsOn = !SaveData.HapticsOn;
             SaveData.ApplySettings();
             RefreshSettingLabels();
@@ -1914,10 +1919,13 @@ public partial class UIManager : MonoBehaviour
         // muted wholesale instead of tuned.
         var notifBtn = Button_("NotifBtn", root, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(700, SettingsRowH),
                                "", 36, Accent, false, out _notifLabel);
-        var notifHold = notifBtn.gameObject.AddComponent<HoldToDiagnose>();
+        HoldToDiagnose notifHold = null;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        notifHold = notifBtn.gameObject.AddComponent<HoldToDiagnose>();
+#endif
         notifBtn.onClick.AddListener(() =>
         {
-            if (notifHold.FiredThisPress) return;   // the release that ends a long-press is not a tap
+            if (notifHold != null && notifHold.FiredThisPress) return;   // the release that ends a long-press is not a tap
             // ON but blocked by the OS: the in-game switch is not the problem, so tapping the row
             // goes straight to the system page instead of flipping a toggle that changes nothing.
             if (GameNotifications.Enabled && !GameNotifications.CanPost)
@@ -1940,6 +1948,7 @@ public partial class UIManager : MonoBehaviour
         notifBtn.gameObject.SetActive(false);
 #endif
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
         // Long-press on the reminders row arms a probe that fires 60 seconds after the app is
         // backgrounded. "Do reminders reach a closed app" is otherwise a question that takes until
         // tomorrow morning to answer, and every tester report so far has been a guess.
@@ -1963,6 +1972,7 @@ public partial class UIManager : MonoBehaviour
             ShowToast("VIBRATION TEST\n<size=60%>" + Haptics.Status + "</size>", Accent, 4f);
             Debug.Log("[Sonarfall] Haptics self-test: " + Haptics.Status);
         };
+#endif
 
         // RESET PROGRESS used to live here, behind a confirm step. It is gone entirely.
         //

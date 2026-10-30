@@ -9,6 +9,9 @@ using UnityEngine.EventSystems;
 /// not be discoverable enough that an ordinary player triggers it by accident. Anyone who needs it
 /// can be told "hold the vibration row for a second".
 ///
+/// Only ever added in the Editor and Development builds (see UIManager.BuildSettings): it is
+/// tester tooling. In a release build nothing references it and managed stripping removes it.
+///
 /// The press is cancelled on pointer-up or on the finger leaving the element, so a normal tap
 /// still toggles the setting exactly as before.
 /// </summary>
