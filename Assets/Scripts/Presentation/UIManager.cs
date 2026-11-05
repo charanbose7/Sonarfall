@@ -1899,10 +1899,8 @@ public partial class UIManager : MonoBehaviour
         // not — without this check a tester running the self-test also flipped the setting off.
         // The long-press diagnostics exist only in the Editor and Development builds; a release
         // build ships plain toggles. Give testers a Development build to keep them.
-        HoldToDiagnose hold = null;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        hold = hapticBtn.gameObject.AddComponent<HoldToDiagnose>();
-#endif
+        // Debug.isDebugBuild, not #if DEVELOPMENT_BUILD: Unity 6.6 deprecated that define.
+        HoldToDiagnose hold = Debug.isDebugBuild ? hapticBtn.gameObject.AddComponent<HoldToDiagnose>() : null;
         hapticBtn.onClick.AddListener(() =>
         {
             if (hold != null && hold.FiredThisPress) return;
@@ -1919,10 +1917,7 @@ public partial class UIManager : MonoBehaviour
         // muted wholesale instead of tuned.
         var notifBtn = Button_("NotifBtn", root, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(700, SettingsRowH),
                                "", 36, Accent, false, out _notifLabel);
-        HoldToDiagnose notifHold = null;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        notifHold = notifBtn.gameObject.AddComponent<HoldToDiagnose>();
-#endif
+        HoldToDiagnose notifHold = Debug.isDebugBuild ? notifBtn.gameObject.AddComponent<HoldToDiagnose>() : null;
         notifBtn.onClick.AddListener(() =>
         {
             if (notifHold != null && notifHold.FiredThisPress) return;   // the release that ends a long-press is not a tap
@@ -1948,11 +1943,10 @@ public partial class UIManager : MonoBehaviour
         notifBtn.gameObject.SetActive(false);
 #endif
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
         // Long-press on the reminders row arms a probe that fires 60 seconds after the app is
         // backgrounded. "Do reminders reach a closed app" is otherwise a question that takes until
         // tomorrow morning to answer, and every tester report so far has been a guess.
-        notifHold.OnHeld = () =>
+        if (notifHold != null) notifHold.OnHeld = () =>
         {
             GameNotifications.ScheduleTest(60f);
             ShowToast("TEST REMINDER ARMED\n<size=60%>Leave the app now — it arrives in about a minute.\n"
@@ -1966,13 +1960,12 @@ public partial class UIManager : MonoBehaviour
         // buzz fires depends on OS version, the OEM's motor, whether it has amplitude control, and
         // system settings the app cannot see. Any tester can now hold this row, feel six distinct
         // pulses (or not), and send back the single log line that says which of those it was.
-        hold.OnHeld = () =>
+        if (hold != null) hold.OnHeld = () =>
         {
             Haptics.SelfTest(this);
             ShowToast("VIBRATION TEST\n<size=60%>" + Haptics.Status + "</size>", Accent, 4f);
             Debug.Log("[Sonarfall] Haptics self-test: " + Haptics.Status);
         };
-#endif
 
         // RESET PROGRESS used to live here, behind a confirm step. It is gone entirely.
         //
