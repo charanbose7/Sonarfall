@@ -65,13 +65,13 @@ public class SonarManager : MonoBehaviour
         _fxContainer = container.transform;
         _fxContainer.SetParent(transform, false);
 
-        var mat = new Material(Shader.Find("Sonarfall/Additive")) { name = "SonarFxMat" };
-
-        _rings = BuildPool("Ring", VisualUtils.Ring(), mat, 40);
-        _flashes = BuildPool("Flash", VisualUtils.RadialGlow(), mat, 45);
+        // Each pool gets the material for its own texture (VisualUtils.AdditiveFor). The rings and
+        // flashes used to share one, and were drawn with a single texture between them.
+        _rings = BuildPool("Ring", VisualUtils.Ring(), 40);
+        _flashes = BuildPool("Flash", VisualUtils.RadialGlow(), 45);
     }
 
-    private Pooled[] BuildPool(string name, Sprite sprite, Material mat, int sorting)
+    private Pooled[] BuildPool(string name, Sprite sprite, int sorting)
     {
         var pool = new Pooled[PoolSize];
         for (int i = 0; i < PoolSize; i++)
@@ -79,8 +79,7 @@ public class SonarManager : MonoBehaviour
             var go = new GameObject(name + i);
             go.transform.SetParent(_fxContainer, false);
             var sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = sprite;
-            sr.sharedMaterial = mat;
+            VisualUtils.SetAdditive(sr, sprite);
             sr.sortingOrder = sorting;
             go.SetActive(false);
             pool[i] = new Pooled { tr = go.transform, sr = sr, active = false };
@@ -91,6 +90,40 @@ public class SonarManager : MonoBehaviour
     public void SetPlayer(Transform player) => _player = player;
 
     public void SetMazeDiagonal(float diagonal) => _maxDetectRadius = diagonal;
+
+    // ---- Still water (STILLWATER) ----
+    // Patches where the echo dies. Owned here rather than by the hazard code because every
+    // consumer of "what does the sonar show at this point" has to agree on them: the wall shader,
+    // RevealAt (decoys, orb, hunter) and the tick audio, which goes silent inside one too.
+    public const int MaxStillZones = 4;   // must match MAX_STILL in SonarWall.shader
+    private readonly Vector4[] _still = new Vector4[MaxStillZones];
+    private int _stillCount;
+
+    /// <summary>Replace the level's still-water patches: (centre, radius). Empty clears them.</summary>
+    public void SetStillZones(System.Collections.Generic.List<Vector3> zones)
+    {
+        _stillCount = 0;
+        for (int i = 0; i < MaxStillZones; i++)
+        {
+            bool on = zones != null && i < zones.Count;
+            _still[i] = on ? new Vector4(zones[i].x, zones[i].y, zones[i].z, 1f) : Vector4.zero;
+            if (on) _stillCount++;
+        }
+        Shader.SetGlobalVectorArray(IdStillZones, _still);
+    }
+
+    /// <summary>0 in open water, 1 deep inside a still patch — same falloff as the shader.</summary>
+    public float StillAt(Vector2 p)
+    {
+        float s = 0f;
+        for (int i = 0; i < _stillCount; i++)
+        {
+            float d = Vector2.Distance(p, new Vector2(_still[i].x, _still[i].y));
+            float r = _still[i].z;
+            s = Mathf.Max(s, 1f - Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((d - (r - 0.35f)) / 0.35f)));
+        }
+        return s;
+    }
 
     /// <summary>Apply the per-level sonar tuning.</summary>
     public void ApplyProfile(Difficulty d)
@@ -117,7 +150,8 @@ public class SonarManager : MonoBehaviour
             if (ts < 0f) continue;
             best = Mathf.Max(best, Mathf.Clamp01(1f - ts / _fade));
         }
-        return best;
+        // Anything sitting in still water is as invisible to the sonar as the walls there are.
+        return _stillCount > 0 && best > 0f ? best * (1f - StillAt(p)) : best;
     }
 
     /// <summary>Cache wall centers for tick detection; sizes the per-ping "ticked" arrays.</summary>
@@ -215,6 +249,8 @@ public class SonarManager : MonoBehaviour
     private static readonly int IdSonarFade  = Shader.PropertyToID("_SonarFade");
     private static readonly int IdSonarBand  = Shader.PropertyToID("_SonarBand");
     private static readonly int IdSonarFlash = Shader.PropertyToID("_SonarFlash");
+    private static readonly int IdStillZones = Shader.PropertyToID("_StillZones");
+    private static readonly int IdPlayerLight = Shader.PropertyToID("_PlayerLight");
 
     private void PushGlobals()
     {
@@ -230,6 +266,12 @@ public class SonarManager : MonoBehaviour
         Shader.SetGlobalFloat(IdSonarFade,  _fade);
         Shader.SetGlobalFloat(IdSonarBand,  _band);
         Shader.SetGlobalFloat(IdSonarFlash, GameConfig.FlashBoost);
+
+        // The player's own light only matters inside still water; outside it the strength is 0
+        // and the shader term vanishes.
+        Vector2 pp = _player != null ? (Vector2)_player.position : Vector2.zero;
+        Shader.SetGlobalVector(IdPlayerLight, new Vector4(pp.x, pp.y, GameConfig.StillLightRadius,
+                                                          _stillCount > 0 ? 0.85f : 0f));
     }
 
     private void UpdateRings()
@@ -284,6 +326,7 @@ public class SonarManager : MonoBehaviour
 
             float radiusSqr = radius * radius;       // hoisted out of the inner loop
             bool anyNew = false, anyNearNew = false;
+            float sumDx = 0f; int heard = 0;         // where this frame's echoes came from
             for (int w = 0; w < _wallCount; w++)
             {
                 if (p.ticked[w]) continue;
@@ -293,7 +336,10 @@ public class SonarManager : MonoBehaviour
 
                 p.ticked[w] = true;
                 p.tickedWalls++;
+                // Still water is silent as well as dark — a wall there returns no echo at all.
+                if (_stillCount > 0 && StillAt(wc) > 0.5f) continue;
                 anyNew = true;
+                sumDx += wc.x - pp.x; heard++;
                 float pdx = wc.x - pp.x, pdy = wc.y - pp.y;
                 if (pdx * pdx + pdy * pdy < nearSqr) anyNearNew = true;
             }
@@ -302,7 +348,11 @@ public class SonarManager : MonoBehaviour
             {
                 // Pitch rises with radius so a sweep reads as a cascade.
                 float pitch = 1f + radius * 0.02f + UnityEngine.Random.Range(-GameConfig.TickPitchJitter, GameConfig.TickPitchJitter);
-                _audio.PlayTick(pitch);
+                // Pan follows the walls that just answered: the front hits every direction at the
+                // same moment, so the average offset IS the side the maze is denser on at this
+                // range. Normalised by the radius, so "all on the left" is hard left at any distance.
+                float pan = heard > 0 ? Mathf.Clamp(sumDx / heard / Mathf.Max(0.75f, radius), -1f, 1f) : 0f;
+                _audio.PlayTick(pitch, pan * 0.9f);
                 p.lastTickTime = Time.time;
                 p.tickCount++;
             }

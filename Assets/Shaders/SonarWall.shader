@@ -17,6 +17,11 @@
 //   _SonarFade     = seconds for the blue glow to fade back to black
 //   _SonarBand     = seconds-wide window of the white front flash (thinner = harder to read)
 //   _SonarFlash    = strength multiplier of the white front flash
+//   _SonarGain     = BRIGHTNESS setting (1 = normal). Floored at 1, so an unset global can't black
+//                    the walls out.
+//   _StillZones[i] = (centreX, centreY, radius, activeFlag) — STILLWATER patches. A ping reveals
+//                    nothing inside one; the only light there is the player's own (_PlayerLight).
+//   _PlayerLight   = (x, y, radius, strength)
 //
 // No LightMode tag -> URP renders this as "SRPDefaultUnlit"; Built-in renders it unlit.
 Shader "Sonarfall/SonarWall"
@@ -41,6 +46,7 @@ Shader "Sonarfall/SonarWall"
             #include "UnityCG.cginc"
 
             #define MAX_PINGS 4
+            #define MAX_STILL 4
 
             // ---- Global sonar state (set from C# via Shader.SetGlobalXxx) ----
             float4 _SonarPings[MAX_PINGS];
@@ -49,6 +55,9 @@ Shader "Sonarfall/SonarWall"
             float  _SonarFade;
             float  _SonarBand;
             float  _SonarFlash;
+            float  _SonarGain;
+            float4 _StillZones[MAX_STILL];
+            float4 _PlayerLight;
 
             fixed4 _Color;
 
@@ -101,8 +110,27 @@ Shader "Sonarfall/SonarWall"
                     flash = max(flash, f);
                 }
 
+                // Still water swallows the echo. The soft 0.35 rim is deliberate: a hard cut would
+                // read as a rendering bug, a fade reads as murk.
+                float still = 0.0;
+                [unroll]
+                for (int z = 0; z < MAX_STILL; z++)
+                {
+                    float4 sz = _StillZones[z];
+                    if (sz.w < 0.5) continue;
+                    float d = distance(i.world, sz.xy);
+                    still = max(still, 1.0 - smoothstep(sz.z - 0.35, sz.z, d));
+                }
+                glow  *= 1.0 - still;
+                flash *= 1.0 - still;
+
+                // ...and inside it you see only what is within arm's reach of your own glow.
+                float reach = saturate(1.0 - distance(i.world, _PlayerLight.xy) / max(_PlayerLight.z, 0.001));
+                glow = max(glow, still * reach * _PlayerLight.w);
+
                 // Blue base + additive white bloom on top -> "blooms white, settles blue".
-                float3 rgb = _Color.rgb * glow + float3(1.0, 1.0, 1.0) * flash * _SonarFlash;
+                float gain = max(_SonarGain, 1.0);
+                float3 rgb = (_Color.rgb * glow + float3(1.0, 1.0, 1.0) * flash * _SonarFlash) * gain;
                 float a = max(glow, flash);
                 return fixed4(rgb, a); // additive blend uses rgb; a kept for non-additive setups
             }

@@ -1,9 +1,13 @@
 using UnityEngine;
 
 /// <summary>
-/// Owns the code-built ParticleSystems: ambient drifting dust (so the dark screen never
-/// feels dead), the exit-clear burst, and the wall-slide sparks. All GPU-batched, all
-/// created from code, no imported assets.
+/// Owns the code-built ParticleSystems: marine snow drifting down through the water (so the dark
+/// screen never feels dead), the exit-clear burst, and the wall-slide sparks — plus the depth
+/// gradient behind everything. All GPU-batched, all created from code, no imported assets.
+///
+/// The backdrop used to be a twinkling starfield, while every sector was named for the sea. One
+/// had to go, and the sea is the one that explains the sonar: the field is now marine snow sinking
+/// through a water column that is faintly lit from above and black at the bottom.
 /// </summary>
 public class FxManager : MonoBehaviour
 {
@@ -11,6 +15,7 @@ public class FxManager : MonoBehaviour
     private ParticleSystem _dust;
     private ParticleSystem _burst;
     private ParticleSystem _slide;
+    private Transform _backdrop;
 
     public void Init(Camera cam)
     {
@@ -22,6 +27,23 @@ public class FxManager : MonoBehaviour
         _dust  = CreateDust(mat);
         _burst = CreateBurst(mat);
         _slide = CreateSlide(mat);
+        _backdrop = CreateBackdrop(cam);
+    }
+
+    /// <summary>
+    /// The water column. A child of the camera so it can never be panned or shaken off screen, far
+    /// behind the maze and first in the sort, alpha-blended on the default sprite material (it has
+    /// to replace the clear colour, which additive could never do).
+    /// </summary>
+    private static Transform CreateBackdrop(Camera cam)
+    {
+        var go = new GameObject("DepthBackdrop");
+        go.transform.SetParent(cam.transform, false);
+        go.transform.localPosition = new Vector3(0f, 0f, 30f);
+        var sr = go.AddComponent<SpriteRenderer>();
+        sr.sprite = VisualUtils.DepthGradient();
+        sr.sortingOrder = -100;
+        return go.transform;
     }
 
     /// <summary>Celebration puff from the exit on level clear.</summary>
@@ -41,6 +63,16 @@ public class FxManager : MonoBehaviour
         _burst.transform.position = new Vector3(pos.x, pos.y, 0f);
         _burst.Emit(24);
         m.startColor = GameConfig.ExitColor; // restore default for the next exit burst
+    }
+
+    /// <summary>A coloured puff anywhere — a hunter's bite, a gate, a current's mouth.</summary>
+    public void PlayBurst(Vector2 pos, Color c, int count)
+    {
+        if (_burst == null) return;
+        var m = _burst.main; m.startColor = c;
+        _burst.transform.position = new Vector3(pos.x, pos.y, 0f);
+        _burst.Emit(count);
+        m.startColor = GameConfig.ExitColor;
     }
 
     /// <summary>A few sparks where the dot scrapes a wall.</summary>
@@ -69,12 +101,19 @@ public class FxManager : MonoBehaviour
             _dustW = w; _dustH = h;
             var sh = _dust.shape;
             sh.scale = new Vector3(w, h, 1f);
+            // Overscanned a little so the shake and punch-zoom never show its edge.
+            if (_backdrop != null)
+                _backdrop.localScale = new Vector3(w * 1.2f / VisualUtils.DepthGradientWidth, h * 1.2f, 1f);
         }
     }
 
+    /// <summary>
+    /// Marine snow: soft motes sinking slowly and swaying, rather than stars twinkling in place.
+    /// Fewer and dimmer than the old field — it is texture behind the maze, not something to read.
+    /// </summary>
     private ParticleSystem CreateDust(Material mat)
     {
-        var go = new GameObject("Dust");
+        var go = new GameObject("MarineSnow");
         go.transform.SetParent(transform, false);
         var ps = go.AddComponent<ParticleSystem>();
         ps.Stop();
@@ -82,17 +121,33 @@ public class FxManager : MonoBehaviour
         var main = ps.main;
         main.loop = true;
         main.playOnAwake = false;
-        main.startLifetime = 6f;
-        main.startSpeed = 0.09f;
-        main.startSize = new ParticleSystem.MinMaxCurve(0.02f, 0.13f); // some bigger "near" stars
-        main.startColor = new Color(0.75f, 0.88f, 1f, 0.9f);           // brighter, busier field
-        main.maxParticles = 320;
+        main.startLifetime = 9f;
+        main.startSpeed = 0.02f;
+        main.startSize = new ParticleSystem.MinMaxCurve(0.018f, 0.10f);
+        main.startColor = new ParticleSystem.MinMaxGradient(new Color(0.62f, 0.86f, 0.92f, 0.55f),
+                                                            new Color(0.80f, 0.95f, 1.00f, 0.85f));
+        main.maxParticles = 300;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
         main.gravityModifier = 0f;
 
-        var em = ps.emission; em.enabled = true; em.rateOverTime = 32f;
+        // Sinking, every mote at its own rate...
+        var vel = ps.velocityOverLifetime;
+        vel.enabled = true;
+        vel.space = ParticleSystemSimulationSpace.World;
+        vel.x = new ParticleSystem.MinMaxCurve(-0.02f, 0.02f);
+        vel.y = new ParticleSystem.MinMaxCurve(-0.16f, -0.05f);
+        vel.z = new ParticleSystem.MinMaxCurve(0f, 0f);
+        // ...and swaying a little on the way down, which is what sells it as water.
+        var noise = ps.noise;
+        noise.enabled = true;
+        noise.strength = 0.05f;
+        noise.frequency = 0.35f;
+        noise.scrollSpeed = 0.1f;
+        noise.quality = ParticleSystemNoiseQuality.Low;
+
+        var em = ps.emission; em.enabled = true; em.rateOverTime = 26f;
         var sh = ps.shape; sh.enabled = true; sh.shapeType = ParticleSystemShapeType.Box; sh.scale = new Vector3(10, 10, 1);
-        SetFadeInOut(ps, 0.35f); // fade in and out over life -> stars twinkle
+        SetFadeInOut(ps, 0.3f);
 
         var r = go.GetComponent<ParticleSystemRenderer>();
         r.material = mat; r.sortingOrder = 5;
