@@ -401,7 +401,8 @@ public partial class UIManager
         shareBtn.onClick.AddListener(() =>
         {
             if (string.IsNullOrEmpty(_resShareText)) return;
-            string line = _resShareText.Split('\n')[0];
+            // The toast's font has no star glyph: quote the line up to them, the clipboard keeps them.
+            string line = _resShareText.Split('\n')[0].TrimEnd('★', '☆', ' ', '·');
             // Only say COPIED once the copy has actually happened — on WebGL that is a browser
             // promise, so the toast waits for it. A share sheet speaks for itself; a cancelled
             // one needs no comment.
