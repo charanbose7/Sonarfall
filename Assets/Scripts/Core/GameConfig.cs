@@ -113,7 +113,7 @@ public static class GameConfig
     // decision back in every level.
     public const int   TutorialPingBonus  = 3;     // +3,+2,+1 on levels 1..3
     public const int   RubberBandFails    = 2;     // after this many fails on a level...
-    public const int   RubberBandPings    = 2;     // ...quietly grant this many extra pings
+    public const int   RubberBandPings    = 2;     // ...grant this many extra pings (shown as ASSIST)
     public const float PingBudgetScale    = 0.72f; // fraction of grid size handed out as reveals
 
     // ---- Hull = lives ----
@@ -344,10 +344,10 @@ public static class GameConfig
     public static int RevealPar(int basePings) => Mathf.Max(2, Mathf.CeilToInt(basePings * RevealParFraction));
 
     /// <summary>0..3. Exit is always earned on a clear; the other two are independent.</summary>
-    public static int GradeFor(bool cleared, bool noDamage, int revealsUsed, int par)
+    public static int GradeFor(bool cleared, bool noDamage, bool underPar)
     {
         if (!cleared) return 0;
-        return 1 + (noDamage ? 1 : 0) + (revealsUsed <= par ? 1 : 0);
+        return 1 + (noDamage ? 1 : 0) + (underPar ? 1 : 0);
     }
 
     // ---- Sector helpers ----
