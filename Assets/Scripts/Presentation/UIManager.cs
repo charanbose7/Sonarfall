@@ -448,22 +448,23 @@ public partial class UIManager : MonoBehaviour
     /// Header for the Daily Maze. It is a standalone challenge, so it shows the date rather than
     /// a level number and sector — those belong to the endless run and only confuse the two modes.
     /// </summary>
-    public void SetDailyHeader()
+    public void SetDailyHeader(bool practice)
     {
         _levelText.text = Spaced("DAILY MAZE");
         if (_sectorText != null)
         {
-            _sectorText.text = System.DateTime.Now.ToString("MMM d").ToUpperInvariant();
+            _sectorText.text = practice ? "PRACTICE" : System.DateTime.Now.ToString("MMM d").ToUpperInvariant();
             _sectorText.color = Color.Lerp(Gold, Color.white, 0.35f);
             NeonColor(_sectorText, Gold, 0.6f);
         }
     }
 
     /// <summary>Small sector caption under the level number, e.g. "THE DEEP  ·  3/5".</summary>
-    public void SetSector(string sectorName, int levelInSector, int levelsPerSector, Color color)
+    public void SetSector(string sectorName, int levelInSector, int levelsPerSector, Color color, bool assisted = false)
     {
         if (_sectorText == null) return;
-        _sectorText.text = sectorName + "   ·   " + levelInSector + "/" + levelsPerSector;
+        _sectorText.text = sectorName + "   ·   " + levelInSector + "/" + levelsPerSector
+                         + (assisted ? "   ·   ASSIST" : "");
         _sectorText.color = Color.Lerp(color, Color.white, 0.35f);
         NeonColor(_sectorText, color, 0.6f);   // caption glows in its sector's colour
     }
@@ -647,6 +648,16 @@ public partial class UIManager : MonoBehaviour
             _dailyCheck.rectTransform.anchoredPosition = new Vector2(w * 0.5f + gap * 0.5f, 0f);
             _dailyCheck.gameObject.SetActive(true);
         }
+        else if (SaveData.DailyAttempted)
+        {
+            // The scored run went badly or was abandoned. The maze stays open, for practice only.
+            _dailyLabel.fontSize = 38;
+            _dailyLabel.text = "DAILY PRACTICE";
+            _dailyLabel.color = DailyDoneCol;
+            _dailyLabel.rectTransform.anchoredPosition = Vector2.zero;
+            _dailyCheck.gameObject.SetActive(false);
+            _dailyBtn.interactable = true;
+        }
         else
         {
             _dailyLabel.fontSize = 38;
@@ -656,7 +667,7 @@ public partial class UIManager : MonoBehaviour
             _dailyCheck.gameObject.SetActive(false);
             _dailyBtn.interactable = true;
         }
-        _dailyStreakGlow = dayStreak > 1 && !dailyDone ? Mathf.Clamp01(0.25f + dayStreak * 0.08f) : 0f;
+        _dailyStreakGlow = dayStreak > 1 && !SaveData.DailyAttempted ? Mathf.Clamp01(0.25f + dayStreak * 0.08f) : 0f;
 
         _startOverlay.SetActive(true);
         _celebOverlay.SetActive(false);
@@ -2346,6 +2357,14 @@ public partial class UIManager : MonoBehaviour
     private const float TeachGapT   = 14f;   // title  -> body
     private const float TeachGapB   = 26f;   // body   -> hint
 
+    // The ring around a world target. Its size is fixed on screen while the thing it circles is
+    // not: the bigger the maze, the nearer the far column sits to the edge, and from a 10x10 grid
+    // the full ring ran off the side. It shrinks to fit, and the floor still clears a cell.
+    private const float TeachMarkerMax  = 230f;
+    private const float TeachMarkerMin  = 120f;
+    private const float TeachMarkerPeak = 1.12f;   // the breathing in Update, at its largest
+    private const float TeachMarkerEdge = 8f;      // gap kept to the screen edge
+
     /// <summary>
     /// Size the card to its content and stack the children down from the top edge. Returns the
     /// card's height so the caller can keep it on screen.
@@ -2411,7 +2430,7 @@ public partial class UIManager : MonoBehaviour
         // null target rather than inheriting the previous card's HUD anchor.
         _teachUiTarget = _pendingUiTarget;
         _teachUiTarget2 = _pendingUiTarget2;
-        _teachMarkerSize = _pendingUiTarget != null ? _pendingMarkerSize : 230f;
+        _teachMarkerSize = _pendingUiTarget != null ? _pendingMarkerSize : TeachMarkerMax;
         _pendingUiTarget = null;
         _pendingUiTarget2 = null;
         _pendingMarkerSize = 190f;
@@ -2615,8 +2634,19 @@ public partial class UIManager : MonoBehaviour
 
         Vector2 local;
         RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRT0, sp, null, out local);
-        _teachMarker.GetComponent<RectTransform>().anchoredPosition = local;
+        var markerRT = _teachMarker.GetComponent<RectTransform>();
+        markerRT.anchoredPosition = local;
+        if (_teachUiTarget == null) FitTeachMarker(markerRT, local, canvasRT0);
         UpdateMarkerLabel(local, canvasRT0);
+    }
+
+    /// <summary>Size a world target's ring so it is still on screen at the top of its pulse.</summary>
+    private void FitTeachMarker(RectTransform markerRT, Vector2 local, RectTransform canvasRT)
+    {
+        float room = Mathf.Min(canvasRT.rect.width * 0.5f - Mathf.Abs(local.x),
+                               canvasRT.rect.height * 0.5f - Mathf.Abs(local.y)) - TeachMarkerEdge;
+        _teachMarkerSize = Mathf.Clamp(room * 2f / TeachMarkerPeak, TeachMarkerMin, TeachMarkerMax);
+        markerRT.sizeDelta = new Vector2(_teachMarkerSize, _teachMarkerSize);
     }
 
     /// <summary>

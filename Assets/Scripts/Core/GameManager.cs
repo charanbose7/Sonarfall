@@ -43,6 +43,7 @@ public partial class GameManager : MonoBehaviour
     private int _hull;         // plates left for THIS level: 3 at the start, 0 fails it
     private int _pings, _pingsStart;
     private int _failStreak;   // consecutive fails on the current level (rubber-banding)
+    private bool _assisted;    // this attempt has the rubber band's extra clock and reveals
 
     // What this attempt will be graded on (see GameConfig.GradeFor).
     private bool _damageTaken;
@@ -93,6 +94,7 @@ public partial class GameManager : MonoBehaviour
     /// <summary>Armed when a run begins; the next level built spends the consecutive-day reveals.</summary>
     private bool _dailyBonusPending;
     private bool _isDaily;
+    private bool _dailyPractice;   // a Daily run after today's one scored attempt was used
     private TutorialController _tutorial;
 
     // Camera fx.
@@ -402,6 +404,10 @@ public partial class GameManager : MonoBehaviour
     /// The Daily Maze: one fixed layout per day, a single attempt, its own result screen.
     /// Deliberately a separate mode so the ritual is visible — a daily nobody knows about
     /// retains nobody.
+    ///
+    /// The first run of the day is the one that counts. Later runs are practice: the layout is
+    /// fixed, so a replay is a rehearsal, and scoring one would let a player retry until they
+    /// could share a perfect result. Practice records nothing, shares nothing and says so.
     /// </summary>
     private void BeginDailyRun()
     {
@@ -409,6 +415,8 @@ public partial class GameManager : MonoBehaviour
         Time.timeScale = 1f;
         _isDaily = true;
         _isDescent = false;
+        _dailyPractice = SaveData.DailyAttempted;
+        if (!_dailyPractice) SaveData.MarkDailyAttempted();
         _level = 1; _failStreak = 0;
         _hull = GameConfig.StartHull;     // the daily is a standalone maze, no carry-over
         _dayStreak = SaveData.RegisterDailyVisit();
@@ -416,9 +424,12 @@ public partial class GameManager : MonoBehaviour
         SetGameplayVisuals(true);
         BuildLevel(_level);
         _ui.HideStart();
-        _ui.SetRetryVisible(true);
+        _ui.SetRetryVisible(_dailyPractice);   // RETRY replays this same maze: never on the scored run
         State = GameState.Playing;
-        _ui.ShowBanner("DAILY MAZE  #" + SaveData.DailyNumber, new Color(1f, 0.85f, 0.4f, 1f), 1.0f);
+        _ui.ShowBanner(_dailyPractice
+                           ? "DAILY  #" + SaveData.DailyNumber + "\n<size=55%>PRACTICE   ·   not scored</size>"
+                           : "DAILY MAZE  #" + SaveData.DailyNumber + "\n<size=55%>ONE ATTEMPT</size>",
+                       new Color(1f, 0.85f, 0.4f, 1f), 1.0f);
     }
 
     private void BuildLevel(int level)
@@ -426,6 +437,7 @@ public partial class GameManager : MonoBehaviour
         _pingNudgeArmed = false;   // never let the first-level nudge leak into a later level
         _profile = _isDescent ? GameConfig.GetDescentDifficulty(_descentIndex, _descentSeed)
                               : GameConfig.GetDifficulty(level, _failStreak);
+        _assisted = !_isDaily && !_isDescent && _failStreak >= GameConfig.RubberBandFails;
 
         // The daily run uses the date seed so every player worldwide gets the same layout today.
         int seed = _isDaily ? SaveData.DailySeed : Random.Range(1, int.MaxValue);
@@ -493,13 +505,13 @@ public partial class GameManager : MonoBehaviour
         _ui.SetPingsRemaining(_pings);
         // The Daily is a standalone one-maze challenge, not level 1 of a run, so it gets its
         // own header instead of borrowing the endless run's level/sector readout.
-        if (_isDaily) _ui.SetDailyHeader();
+        if (_isDaily) _ui.SetDailyHeader(_dailyPractice);
         else if (_isDescent) SetDescentHud(sectorColor);
         else
         {
             _ui.SetLevel(level);
             _ui.SetSector(GameConfig.SectorName(level), GameConfig.LevelInSector(level),
-                          GameConfig.LevelsPerSector, sectorColor);
+                          GameConfig.LevelsPerSector, sectorColor, _assisted);
         }
         if (_isDescent)
         {
@@ -749,6 +761,11 @@ public partial class GameManager : MonoBehaviour
     private void CheckFirstEncounters()
     {
         if (State != GameState.Playing || _ui.TeachOpen || _player.IsRewinding) return;
+        // A pulse promises the game is not pausing, so nothing may pause under it. The tutorial's
+        // own ping often lights a bonus echo, and without this its card froze the world two frames
+        // after the EXIT card closed, just as TIME LEFT pulsed and the player first took control:
+        // the controls looked dead until they found the card at the bottom of the screen.
+        if (_ui.HudPulseBusy) return;
         Vector2 pp = _player.transform.position;
 
         // A decoy close enough to matter, and lit. They are the one mechanic that PUNISHES you,
@@ -1192,13 +1209,16 @@ public partial class GameManager : MonoBehaviour
     {
         State = GameState.Celebrating;
         _audio.SilenceWorld();
+        _ui.ClearBanner();                  // a banner still fading would print over the clear card
 
         // The grade: one star per stated rule. Reaching the exit is always one; keeping the hull
         // intact is another; spending no more than half the level's reveals is the third.
         int par = GameConfig.RevealPar(_profile.pings);
         bool noDamage = !_damageTaken;
-        bool underPar = _revealsUsed <= par;
-        int grade = GameConfig.GradeFor(true, noDamage, _revealsUsed, par);
+        // An assisted run can't earn the reveal star, so it tops out at SHARP. Spending half of a
+        // budget that was raised to help you is not what PERFECT means. RETRY drops the assist.
+        bool underPar = !_assisted && _revealsUsed <= par;
+        int grade = GameConfig.GradeFor(true, noDamage, underPar);
         bool clutch = _profile.timeLimit > 0f && _levelTimer <= GameConfig.ClutchSeconds;
         bool sectorDone = !_isDaily && !_isDescent && GameConfig.IsSectorFinale(_level);
 
@@ -1215,6 +1235,11 @@ public partial class GameManager : MonoBehaviour
         // a level: clear level 1 and it stayed locked, fail it and it opened. Winning is the more
         // obvious qualification of the two.
         if (!_isDaily) SaveData.MarkRunFinished();
+
+        // Banked here for the same reason as the grade above: this routine can still be cut short.
+        // Stored at the end of it, leaving during the celebration lost the clear and reopened
+        // the Daily for another go.
+        bool dailyBest = _isDaily && !_dailyPractice && SaveData.CompleteDaily(grade);
 
         // The notification prompt used to fire here, after the first clear. It moved to the first
         // PLAY tap (AfterFirstRunPrompt): testers who had already cleared a level on an earlier
@@ -1252,7 +1277,7 @@ public partial class GameManager : MonoBehaviour
         // The Daily is one standalone maze, so "LEVEL 1 CLEAR" is meaningless there — and its
         // title must win over the sector/clutch variants, which belong to the ladder.
         if (_isDaily)
-            _ui.SetCelebrationTitle("DAILY  #" + SaveData.DailyNumber + "\nCLEAR", UIManager.Gold);
+            _ui.SetCelebrationTitle("DAILY  #" + SaveData.DailyNumber + (_dailyPractice ? "\nPRACTICE" : "\nCLEAR"), UIManager.Gold);
         else if (sectorDone)
             _ui.SetCelebrationTitle("SECTOR CLEAR\n" + GameConfig.SectorName(_level), GameConfig.SectorWallColor(_level));
         else if (clutch)
@@ -1287,7 +1312,8 @@ public partial class GameManager : MonoBehaviour
         {
             "EXIT\n<size=72%>reached</size>",
             "NO DAMAGE\n<size=72%>" + (noDamage ? "hull intact" : "hull hit") + "</size>",
-            "MAX " + par + " REVEALS\n<size=72%>used " + _revealsUsed + "</size>",
+            _assisted ? "ASSISTED\n<size=72%>no reveal star</size>"
+                      : "MAX " + par + " REVEALS\n<size=72%>used " + _revealsUsed + "</size>",
         });
         yield return new WaitForSecondsRealtime(UIManager.GradeRowSeconds);
 
@@ -1304,7 +1330,6 @@ public partial class GameManager : MonoBehaviour
         if (_isDaily)
         {
             yield return new WaitForSecondsRealtime(GameConfig.CelebrationTime);
-            bool dailyBest = SaveData.CompleteDaily(grade);
             _ui.HideCelebration();
             ShowDailyCard(true, grade, dailyBest);
             State = GameState.Start;   // the card's CONTINUE takes the player back to the menu
@@ -1333,28 +1358,32 @@ public partial class GameManager : MonoBehaviour
 
     /// <summary>
     /// The Daily's result card. Shareable as one line — "Sonarfall Daily #59 · 9.4s · 2 pings" —
-    /// which is the Wordle trick: the result is the advert.
+    /// which is the Wordle trick: the result is the advert. Only a scored clear gets the button:
+    /// a loss is a poor advert, and practice isn't a result.
     /// </summary>
-    private void ShowDailyCard(bool cleared, int grade, bool newBest)
+    private void ShowDailyCard(bool cleared, int grade, bool newBest, string failHead = null)
     {
         int n = SaveData.DailyNumber;
         string pings = _revealsUsed + " ping" + (_revealsUsed == 1 ? "" : "s");
         string secs = _levelElapsed.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "s";
         string stars = cleared ? StarText(grade) : "";
 
-        string big = cleared ? secs + "   ·   " + pings : "OUT OF TIME";
+        string big = cleared ? secs + "   ·   " + pings : failHead;
         // Words, not ★: the UI fonts have no star glyph (the card draws its stars as sprites).
         string best = SaveData.DailyBest > 0 ? "best  " + SaveData.DailyBest + "/3 stars" : "";
-        string detail = (newBest ? "<color=#FFD15A>NEW DAILY BEST</color>\n" : "")
-                      + "Day streak  " + _dayStreak + (best.Length > 0 ? "      " + best : "")
-                      + "\n<size=80%>A new maze unlocks tomorrow.</size>";
-        string share = cleared
-            ? "Sonarfall Daily #" + n + " · " + secs + " · " + pings + " · " + stars
-            : "Sonarfall Daily #" + n + " · out of time · " + pings;
-        share += "\n" + GameConfig.StoreUrl;
+        string detail = _dailyPractice
+            ? "Practice runs aren't scored."
+            : (newBest ? "<color=#FFD15A>NEW DAILY BEST</color>\n" : "")
+              + "Day streak  " + _dayStreak + (best.Length > 0 ? "      " + best : "");
+        detail += cleared || _dailyPractice
+            ? "\n<size=80%>A new maze unlocks tomorrow.</size>"
+            : "\n<size=80%>Practice it today. A new maze unlocks tomorrow.</size>";
+        string share = cleared && !_dailyPractice
+            ? "Sonarfall Daily #" + n + " · " + secs + " · " + pings + " · " + stars + "\n" + GameConfig.StoreUrl
+            : null;
 
-        _ui.ShowResult("DAILY  #" + n, UIManager.Gold, cleared ? grade : 0, big, detail, share,
-                       "CONTINUE", ReturnToMenu);
+        _ui.ShowResult((_dailyPractice ? "PRACTICE  #" : "DAILY  #") + n, UIManager.Gold, cleared ? grade : 0,
+                       big, detail, share, "CONTINUE", ReturnToMenu);
     }
 
     /// <summary>★★☆ — for share text, where the UI's sprite stars can't go.</summary>
@@ -1408,15 +1437,14 @@ public partial class GameManager : MonoBehaviour
             yield break;
         }
 
-        // Failing the daily no longer burns the day. It used to call CompleteDaily(0), which locked
-        // the button to "DAILY DONE" — so a player who died eight seconds in had nothing left to
-        // come back for, and the one feature built specifically to pull them in tomorrow punished
-        // them for showing up today. The single-attempt tension lives in the CLEAR being recorded
-        // once, not in a loss consuming the whole day.
+        // Failing the daily ends the scored attempt but not the day. It used to call
+        // CompleteDaily(0), which locked the button to "DAILY DONE" — so a player who died eight
+        // seconds in had nothing left to come back for. They can still practise today's maze;
+        // what they can't do is keep retrying until a run is worth sharing.
         if (_isDaily)
         {
             SetGameplayVisuals(false);
-            ShowDailyCard(false, 0, false);
+            ShowDailyCard(false, 0, false, head);
             State = GameState.Start;
             yield break;
         }
@@ -1443,6 +1471,20 @@ public partial class GameManager : MonoBehaviour
         BuildLevel(_level);
         State = GameState.Playing;
         _ui.SetCover(0f);
+        if (_failStreak == GameConfig.RubberBandFails) AnnounceAssist();
+    }
+
+    /// <summary>
+    /// Say what the rubber band just gave. It used to be silent, so a player who noticed a retry
+    /// with more time and reveals had every reason to read it as leftover state from the last
+    /// attempt. The HUD caption keeps saying ASSIST for as long as it lasts.
+    /// </summary>
+    private void AnnounceAssist()
+    {
+        var plain = GameConfig.GetDifficulty(_level, 0);
+        int seconds = Mathf.RoundToInt(_profile.timeLimit - plain.timeLimit);
+        _ui.ShowBanner("ASSIST ON\n<size=55%>+" + seconds + "s   ·   +" + (_profile.pings - plain.pings)
+                       + " reveals   ·   no reveal star</size>", UIManager.Accent, 1.5f);
     }
 
     private bool _failRetryRequested;
@@ -1497,6 +1539,8 @@ public partial class GameManager : MonoBehaviour
         // A free re-roll would let a dive skip any maze it didn't like; DESCENT hides the button,
         // and this is the backstop.
         if (_isDescent) return;
+        // Same layout, full clock: on the scored Daily that is a free second attempt.
+        if (_isDaily && !_dailyPractice) return;
         // Reject re-entry while a rebuild is already running. This used to StopAllCoroutines() and
         // start over unconditionally, so a second tap could kill the previous routine in the window
         // between SetCover(1f) and SetCover(0f) — the cover never came back down and the game was
@@ -1534,7 +1578,7 @@ public partial class GameManager : MonoBehaviour
         _failStreak = 0;
         BuildLevel(_level);
         SetGameplayVisuals(true);           // a reset from the clear card must bring the glows back
-        _ui.ShowBanner("LEVEL " + _level + "\nRESET", UIManager.Accent, 0.9f);
+        _ui.ShowBanner((_isDaily ? "PRACTICE" : "LEVEL " + _level) + "\nRESET", UIManager.Accent, 0.9f);
 
         yield return new WaitForSecondsRealtime(0.12f);   // hold the black a beat so it registers
 

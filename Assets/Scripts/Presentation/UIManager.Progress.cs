@@ -72,6 +72,9 @@ public partial class UIManager
         StartPulse(_pulseQueue.Dequeue());
     }
 
+    /// <summary>A pulse is playing or waiting its turn. Callouts hold off until it has finished.</summary>
+    public bool HudPulseBusy => _pulseT >= 0f || _pulseQueue.Count > 0;
+
     /// <summary>Drop everything — the level is being left.</summary>
     private void CancelHudPulses()
     {
@@ -328,7 +331,7 @@ public partial class UIManager
     private TMP_Text _resTitle, _resBig, _resDetail;
     private readonly Image[] _resStars = new Image[3];
     private TMP_Text _resPrimaryLbl, _resSecondaryLbl;
-    private Button _resSecondaryBtn;
+    private Button _resSecondaryBtn, _resShareBtn;
     private System.Action _resPrimary, _resSecondary;
     private string _resShareText;
 
@@ -396,9 +399,9 @@ public partial class UIManager
         _resDetail.textWrappingMode = TextWrappingModes.Normal;
 
         TMP_Text shareLbl;
-        var shareBtn = Button_("ResShare", root, new Vector2(0.5f, 0.5f), new Vector2(0, -250),
+        _resShareBtn = Button_("ResShare", root, new Vector2(0.5f, 0.5f), new Vector2(0, -250),
                                new Vector2(420, 104), Spaced("SHARE"), 36, Gold, false, out shareLbl);
-        shareBtn.onClick.AddListener(() =>
+        _resShareBtn.onClick.AddListener(() =>
         {
             if (string.IsNullOrEmpty(_resShareText)) return;
             // The toast's font has no star glyph: quote the line up to them, the clipboard keeps them.
@@ -443,7 +446,8 @@ public partial class UIManager
 
     /// <summary>
     /// Show the result card. <paramref name="stars"/> &lt; 0 hides the star row (a dive has a depth,
-    /// not a grade). <paramref name="secondary"/> null hides the second button.
+    /// not a grade). <paramref name="onSecondary"/> null hides the second button, and a null
+    /// <paramref name="shareText"/> hides SHARE.
     /// </summary>
     public void ShowResult(string title, Color titleColor, int stars, string bigLine, string detail,
                            string shareText, string primaryLabel, System.Action onPrimary,
@@ -463,6 +467,7 @@ public partial class UIManager
         _resBig.text = bigLine;
         _resDetail.text = detail;
         _resShareText = shareText;
+        _resShareBtn.gameObject.SetActive(!string.IsNullOrEmpty(shareText));
 
         _resPrimaryLbl.text = Spaced(primaryLabel);
         _resPrimary = onPrimary;

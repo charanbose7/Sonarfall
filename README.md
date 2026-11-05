@@ -97,7 +97,7 @@ A **bonus echo** hidden in a dead end repairs a plate. It only appears on 18% of
 
 They were lives once, and players read the row as a score they were losing. Now each word means what everyone expects it to.
 
-Fail twice in a row on one level and the game quietly hands you two extra reveals and 20% more time. A tighter clock must not become a wall.
+Fail twice in a row on one level and the game turns on **assist**: two extra reveals and 20% more time, so a tighter clock doesn't become a wall. A banner says what you got and the HUD reads ASSIST for as long as it lasts. An assisted clear can't earn the reveal star, so it tops out at SHARP. Pressing RETRY drops the assist.
 
 ---
 
@@ -153,7 +153,7 @@ Twists also land early, so no player sits through two identical levels: **decoys
 
 ## Other ways to play
 
-**Daily.** One maze a day, generated from the date so everyone gets the same one. Unlocks after your first run. Keeps a day streak, and sharing the result copies a one-line card with your time, pings and stars.
+**Daily.** One maze a day, generated from the date so everyone gets the same one. Unlocks after your first run. You get one scored attempt, spent the moment it starts. Clear it and you can share a one-line card with your time, pings and stars. If you fail or quit, the maze stays open as practice for the rest of the day, but practice runs record nothing and can't be shared. The day streak counts days you play.
 
 **Descent.** The endless mode, unlocked by clearing sector 1. One hull for the whole dive, maze after maze, with every sector rule mixed in. Depth is the score at 100 m a maze. A plate is repaired every five mazes, running out of time costs a plate and re-rolls the maze, and there is no retry. Your deepest dive is saved on the device.
 

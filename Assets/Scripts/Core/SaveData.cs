@@ -18,6 +18,7 @@ public static class SaveData
     private const string KNotifAsked = "em_notif_asked";  // the one-time permission prompt has run
     private const string KDailyDone  = "em_daily_done";   // UTC day number of the last daily clear
     private const string KDailyBest  = "em_daily_best";   // best daily grade (0..3)
+    private const string KDailyTried = "em_daily_tried";  // UTC day number of the last scored attempt
     private const string KRunFinished= "em_run_finished";  // player has completed one endless run
     private const string KTaughtOrb  = "em_taught_orb";    // seen the bonus-echo explainer
     private const string KTaughtDecoy= "em_taught_decoy";  // seen the decoy explainer
@@ -86,6 +87,19 @@ public static class SaveData
     // ---- Daily Maze run ----
     /// <summary>Has today's daily maze already been completed? (One attempt per day.)</summary>
     public static bool DailyDone => PlayerPrefs.GetInt(KDailyDone, -1) == TodayNumber;
+
+    /// <summary>
+    /// Has today's one scored attempt been used? It is spent when the run STARTS, not when it ends:
+    /// spent at the end, quitting a bad run to the menu or closing the app would hand back a fresh
+    /// try at the same maze. Every run after this one is practice.
+    /// </summary>
+    public static bool DailyAttempted => DailyDone || PlayerPrefs.GetInt(KDailyTried, -1) == TodayNumber;
+
+    public static void MarkDailyAttempted()
+    {
+        PlayerPrefs.SetInt(KDailyTried, TodayNumber);
+        PlayerPrefs.Save();
+    }
 
     /// <summary>Best grade ever earned on a Daily, 0..3. Clamped because it used to hold the
     /// stars-left count (up to 4) from before grades existed.</summary>
