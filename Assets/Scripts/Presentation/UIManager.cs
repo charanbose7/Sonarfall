@@ -551,6 +551,7 @@ public partial class UIManager : MonoBehaviour
     public void ShowStart(int currentLevel, int dayStreak, bool dailyDone, bool dailyUnlocked)
     {
         HideToast();
+        ClearBanner();
         // Where they are, and what they are heading for. A "best" figure was dropped from here —
         // it only ever tells a player they were once further along than they are now — and the
         // space is far better spent naming the next milestone, which is something to play TOWARD
@@ -774,6 +775,19 @@ public partial class UIManager : MonoBehaviour
         if (_bannerFrame != null) _bannerFrame.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, 0f);
     }
 
+
+    /// <summary>
+    /// Drop any banner, on screen or waiting behind a callout. The menu calls this: a sector
+    /// announcement fired just before quitting otherwise kept fading over the menu's buttons.
+    /// </summary>
+    public void ClearBanner()
+    {
+        _pendingBanner = null;
+        _bannerT = -1f;
+        _bannerText.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, 0f);
+        if (_bannerBg != null) _bannerBg.color = new Color(PanelScrim.r, PanelScrim.g, PanelScrim.b, 0f);
+        if (_bannerFrame != null) _bannerFrame.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, 0f);
+    }
 
     public void ShowRewind() => _rewindT = 0f;
     public void PlayRewindEffect() => _rewindFxT = 0f;
